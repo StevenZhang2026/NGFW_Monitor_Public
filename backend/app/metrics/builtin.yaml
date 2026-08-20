@@ -1,0 +1,157 @@
+# Built-in metric definitions
+# These are loaded on first startup and cannot be deleted (only disabled)
+
+- name: cpu_usage
+  display_name: "CPU 使用率"
+  category: system_resource
+  collector: panos_api
+  command: "<show><system><resources></resources></system></show>"
+  parser:
+    type: regex_cdata
+    pattern: "%Cpu\\(s\\):\\s+(\\d+\\.?\\d*)\\s+us"
+  data_type: gauge
+  unit: "%"
+  interval: 60
+  interval_min: 10
+  interval_max: 300
+  chart_type: line
+
+- name: memory_usage
+  display_name: "内存使用率"
+  category: system_resource
+  collector: panos_api
+  command: "<show><system><resources></resources></system></show>"
+  parser:
+    type: regex_cdata
+    pattern: "KiB Mem\\s*:\\s*(\\d+)\\s+total.*?(\\d+)\\s+used"
+    calc: "value1 / value0 * 100"
+  data_type: gauge
+  unit: "%"
+  interval: 60
+  interval_min: 10
+  interval_max: 300
+  chart_type: line
+
+- name: session_count
+  display_name: "活跃会话数"
+  category: system_resource
+  collector: panos_api
+  command: "<show><session><info></info></session></show>"
+  parser:
+    type: xpath
+    expr: ".//num-active"
+  data_type: gauge
+  unit: "sessions"
+  interval: 60
+  interval_min: 10
+  interval_max: 300
+  chart_type: area
+
+- name: session_max
+  display_name: "最大会话数"
+  category: system_resource
+  collector: panos_api
+  command: "<show><session><info></info></session></show>"
+  parser:
+    type: xpath
+    expr: ".//num-max"
+  data_type: gauge
+  unit: "sessions"
+  interval: 300
+  interval_min: 60
+  interval_max: 600
+  chart_type: line
+
+- name: session_cps
+  display_name: "每秒新建会话"
+  category: system_resource
+  collector: panos_api
+  command: "<show><session><info></info></session></show>"
+  parser:
+    type: xpath
+    expr: ".//cps"
+  data_type: gauge
+  unit: "cps"
+  interval: 60
+  interval_min: 10
+  interval_max: 300
+  chart_type: line
+
+- name: session_kbps
+  display_name: "吞吐量"
+  category: system_resource
+  collector: panos_api
+  command: "<show><session><info></info></session></show>"
+  parser:
+    type: xpath
+    expr: ".//kbps"
+  data_type: gauge
+  unit: "kbps"
+  interval: 60
+  interval_min: 10
+  interval_max: 300
+  chart_type: area
+
+- name: temperature
+  display_name: "设备温度"
+  category: hardware
+  collector: panos_ssh
+  command: "show system environmentals"
+  parser:
+    type: regex_multi
+    pattern: "(?m)^\\s*(\\S+)\\s+.+?\\s+(?:True|False)\\s+([\\d.]+)"
+  data_type: gauge
+  unit: "°C"
+  interval: 300
+  interval_min: 60
+  interval_max: 600
+  chart_type: line
+
+- name: interface_throughput_in
+  display_name: "接口入向流量"
+  category: network
+  collector: panos_api
+  command: "<show><counter><interface>all</interface></counter></show>"
+  parser:
+    type: xpath_multi
+    entries_expr: ".//ifnet/ifnet/entry"
+    value_expr: "ibytes/text()"
+    label_expr: "name/text()"
+  data_type: counter
+  unit: "bytes"
+  interval: 60
+  interval_min: 10
+  interval_max: 300
+  chart_type: area
+
+- name: interface_throughput_out
+  display_name: "接口出向流量"
+  category: network
+  collector: panos_api
+  command: "<show><counter><interface>all</interface></counter></show>"
+  parser:
+    type: xpath_multi
+    entries_expr: ".//ifnet/ifnet/entry"
+    value_expr: "obytes/text()"
+    label_expr: "name/text()"
+  data_type: counter
+  unit: "bytes"
+  interval: 60
+  interval_min: 10
+  interval_max: 300
+  chart_type: area
+
+- name: ha_state
+  display_name: "HA 状态"
+  category: ha
+  collector: panos_api
+  command: "<show><high-availability><all></all></high-availability></show>"
+  parser:
+    type: xpath
+    expr: ".//group/local-info/state"
+  data_type: gauge
+  unit: ""
+  interval: 60
+  interval_min: 30
+  interval_max: 300
+  chart_type: line

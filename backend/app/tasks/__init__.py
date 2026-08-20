@@ -1,0 +1,31 @@
+from celery import Celery
+
+from app.config import settings
+
+celery_app = Celery("ngfw_monitor", broker=settings.redis_url, backend=settings.redis_url)
+
+import app.collectors.panos_api  # noqa: E402, F401
+import app.collectors.panos_ssh  # noqa: E402, F401
+import app.collectors.panorama  # noqa: E402, F401
+import app.collectors.file_upload  # noqa: E402, F401
+
+celery_app.conf.update(
+    task_serializer="json",
+    accept_content=["json"],
+    result_serializer="json",
+    timezone="UTC",
+    enable_utc=True,
+    worker_concurrency=settings.collector_concurrency,
+    beat_schedule={
+        "schedule-collections-every-minute": {
+            "task": "tasks.schedule_collections",
+            "schedule": 60.0,
+        },
+        "evaluate-alerts-every-2-minutes": {
+            "task": "tasks.evaluate_alerts",
+            "schedule": 120.0,
+        },
+    },
+)
+
+celery_app.autodiscover_tasks(["app.tasks.collect", "app.tasks.alert"])

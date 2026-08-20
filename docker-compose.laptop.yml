@@ -1,0 +1,32 @@
+services:
+  backend:
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  worker:
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          memory: 300M
+
+  beat:
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+
+  db:
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    shm_size: 128mb
+
+  redis:
+    deploy:
+      resources:
+        limits:
+          memory: 64M

@@ -1,0 +1,35 @@
+# Web framework
+fastapi
+uvicorn[standard]
+python-multipart
+
+# Database
+sqlalchemy[asyncio]
+asyncpg
+alembic
+
+# Redis & Celery
+celery[redis]
+redis
+
+# HTTP client (for PAN-OS API)
+httpx
+
+# SSH (for PAN-OS CLI)
+paramiko
+
+# Auth
+python-jose[cryptography]
+bcrypt
+
+# Notifications
+aiosmtplib
+
+# Utilities
+pydantic
+pydantic-settings
+pyyaml
+lxml
+
+# Data processing (lightweight)
+numpy
