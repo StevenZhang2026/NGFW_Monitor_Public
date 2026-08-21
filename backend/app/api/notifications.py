@@ -110,8 +110,11 @@ async def test_channel(
         raise HTTPException(status_code=400, detail=f"No notifier for type: {channel.type.value}")
 
     notifier = notifier_cls()
-    success = await notifier.test(channel.config)
-    return {"success": success}
+    result = await notifier.test(channel.config)
+    resp = {"success": result.success}
+    if not result.success and result.error:
+        resp["error"] = result.error
+    return resp
 
 
 def _channel_to_dict(c: NotificationChannel) -> dict:

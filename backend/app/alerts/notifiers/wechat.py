@@ -1,6 +1,6 @@
 import httpx
 
-from app.alerts.notifiers.base import BaseNotifier, AlertMessage
+from app.alerts.notifiers.base import BaseNotifier, AlertMessage, SendResult
 
 SEVERITY_EMOJI = {
     "critical": "🔴",
@@ -12,10 +12,10 @@ SEVERITY_EMOJI = {
 class WechatNotifier(BaseNotifier):
     """企业微信群机器人 Webhook 通知"""
 
-    async def send(self, channel_config: dict, alert: AlertMessage) -> bool:
+    async def send(self, channel_config: dict, alert: AlertMessage) -> SendResult:
         webhook_url = channel_config.get("webhook_url")
         if not webhook_url:
-            return False
+            return SendResult(success=False, error="webhook_url not configured")
 
         emoji = SEVERITY_EMOJI.get(alert.severity, "🔵")
         content = (
@@ -34,14 +34,17 @@ class WechatNotifier(BaseNotifier):
         }
 
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with httpx.AsyncClient(timeout=10, verify=False) as client:
                 response = await client.post(webhook_url, json=payload)
                 data = response.json()
-                return data.get("errcode") == 0
-        except Exception:
-            return False
+                if data.get("errcode") != 0:
+                    msg = data.get("errmsg", "unknown error")
+                    return SendResult(success=False, error=f"企业微信返回错误: {msg}")
+                return SendResult(success=True)
+        except Exception as e:
+            return SendResult(success=False, error=f"请求失败: {e}")
 
-    async def test(self, channel_config: dict) -> bool:
+    async def test(self, channel_config: dict) -> SendResult:
         test_alert = AlertMessage(
             title="测试通知",
             device_name="Test Device",

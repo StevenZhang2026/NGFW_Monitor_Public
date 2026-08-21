@@ -306,7 +306,7 @@ function Alerts() {
       if (res.data.success) {
         message.success('测试消息发送成功')
       } else {
-        message.error('测试消息发送失败，请检查配置')
+        message.error(res.data.error || '测试消息发送失败，请检查配置')
       }
     } catch {
       message.error('测试失败')

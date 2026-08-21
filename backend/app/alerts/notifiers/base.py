@@ -13,13 +13,19 @@ class AlertMessage:
     timestamp: str | None = None
 
 
+@dataclass
+class SendResult:
+    success: bool
+    error: str | None = None
+
+
 class BaseNotifier(ABC):
     @abstractmethod
-    async def send(self, channel_config: dict, alert: AlertMessage) -> bool:
-        """Send alert notification. Returns True on success."""
+    async def send(self, channel_config: dict, alert: AlertMessage) -> SendResult:
+        """Send alert notification."""
         ...
 
     @abstractmethod
-    async def test(self, channel_config: dict) -> bool:
+    async def test(self, channel_config: dict) -> SendResult:
         """Send a test message to verify channel configuration."""
         ...

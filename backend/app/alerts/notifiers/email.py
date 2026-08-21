@@ -3,11 +3,11 @@ from email.mime.multipart import MIMEMultipart
 
 import aiosmtplib
 
-from app.alerts.notifiers.base import BaseNotifier, AlertMessage
+from app.alerts.notifiers.base import BaseNotifier, AlertMessage, SendResult
 
 
 class EmailNotifier(BaseNotifier):
-    async def send(self, channel_config: dict, alert: AlertMessage) -> bool:
+    async def send(self, channel_config: dict, alert: AlertMessage) -> SendResult:
         try:
             msg = MIMEMultipart("alternative")
             msg["Subject"] = f"[{alert.severity.upper()}] {alert.title} - {alert.device_name}"
@@ -39,11 +39,11 @@ class EmailNotifier(BaseNotifier):
                 password=channel_config.get("password"),
                 use_tls=channel_config.get("use_ssl", True),
             )
-            return True
-        except Exception:
-            return False
+            return SendResult(success=True)
+        except Exception as e:
+            return SendResult(success=False, error=f"邮件发送失败: {e}")
 
-    async def test(self, channel_config: dict) -> bool:
+    async def test(self, channel_config: dict) -> SendResult:
         test_alert = AlertMessage(
             title="测试通知",
             device_name="Test Device",
