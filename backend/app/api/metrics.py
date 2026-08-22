@@ -232,6 +232,179 @@ async def query_metric_data(
     }
 
 
+@router.get("/acc-trend")
+async def query_acc_trend(
+    metric_name: str = Query(description="acc_application or acc_threat"),
+    start: datetime = Query(default=None),
+    end: datetime = Query(default=None),
+    device_id: str = Query(default=""),
+    top_n: int = Query(default=10, ge=1, le=50),
+    severity: str = Query(default="", description="Filter by severity: 'critical,high' or empty for all"),
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Return Top N items with time-bucketed trend data for ACC metrics."""
+    from datetime import timezone, timedelta
+
+    if metric_name not in ("acc_application", "acc_threat"):
+        raise HTTPException(status_code=400, detail="metric_name must be acc_application or acc_threat")
+
+    if not end:
+        end = datetime.now(timezone.utc)
+    if not start:
+        start = end - timedelta(days=7)
+
+    label_key = "application" if metric_name == "acc_application" else "threat_name"
+
+    device_filter = "AND device_id = :device_id" if device_id else ""
+    params: dict = {"metric_name": metric_name, "start": start, "end": end}
+    if device_id:
+        params["device_id"] = device_id
+
+    severity_filter = ""
+    severity_order = ""
+    if metric_name == "acc_threat" and severity:
+        sev_list = [s.strip() for s in severity.split(",") if s.strip()]
+        sev_in = ", ".join(f"'{s}'" for s in sev_list)
+        severity_filter = f"AND labels->>'severity' IN ({sev_in})"
+        case_lines = "\n".join(f"WHEN '{s}' THEN {i}" for i, s in enumerate(sev_list))
+        severity_order = f"CASE MIN(labels->>'severity') {case_lines} END,"
+
+    top_query = text(f"""
+        SELECT labels->>'{label_key}' AS item_name, SUM(value) AS total
+        FROM metric_data
+        WHERE metric_name = :metric_name
+          AND timestamp >= :start AND timestamp <= :end
+          {device_filter}
+          {severity_filter}
+          AND labels->>'{label_key}' IS NOT NULL
+        GROUP BY item_name
+        ORDER BY {severity_order} total DESC
+        LIMIT :top_n
+    """)
+    params["top_n"] = top_n
+    result = await session.execute(top_query, params)
+    top_items = [row.item_name for row in result.fetchall()]
+
+    if not top_items:
+        return {"metric_name": metric_name, "items": [], "series": []}
+
+    hours_span = (end - start).total_seconds() / 3600
+    if hours_span <= 24:
+        bucket = "1 hour"
+    elif hours_span <= 168:
+        bucket = "6 hours"
+    else:
+        bucket = "1 day"
+
+    series_query = text(f"""
+        SELECT
+            time_bucket(INTERVAL '{bucket}', timestamp) AS ts,
+            labels->>'{label_key}' AS item_name,
+            SUM(value) AS total
+        FROM metric_data
+        WHERE metric_name = :metric_name
+          AND timestamp >= :start AND timestamp <= :end
+          {device_filter}
+          {severity_filter}
+          AND labels->>'{label_key}' = ANY(:items)
+        GROUP BY ts, item_name
+        ORDER BY ts
+    """)
+    series_params: dict = {"metric_name": metric_name, "start": start, "end": end, "items": top_items}
+    if device_id:
+        series_params["device_id"] = device_id
+    result = await session.execute(series_query, series_params)
+    rows = result.fetchall()
+
+    series: dict[str, list] = {item: [] for item in top_items}
+    for row in rows:
+        series[row.item_name].append({"timestamp": str(row.ts), "value": float(row.total)})
+
+    return {
+        "metric_name": metric_name,
+        "bucket": bucket,
+        "items": top_items,
+        "series": series,
+    }
+
+
+@router.get("/acc-ranking")
+async def query_acc_ranking(
+    metric_name: str = Query(description="acc_application or acc_threat"),
+    start: datetime = Query(default=None),
+    end: datetime = Query(default=None),
+    device_id: str = Query(default=""),
+    limit: int = Query(default=50, ge=1, le=200),
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Return full ranking list for ACC metrics with extra label fields."""
+    from datetime import timezone, timedelta
+
+    if metric_name not in ("acc_application", "acc_threat"):
+        raise HTTPException(status_code=400, detail="metric_name must be acc_application or acc_threat")
+
+    if not end:
+        end = datetime.now(timezone.utc)
+    if not start:
+        start = end - timedelta(days=7)
+
+    device_filter = "AND device_id = :device_id" if device_id else ""
+    params: dict = {"metric_name": metric_name, "start": start, "end": end, "limit_n": limit}
+    if device_id:
+        params["device_id"] = device_id
+
+    if metric_name == "acc_application":
+        query = text(f"""
+            SELECT
+                labels->>'application' AS name,
+                SUM(value) AS bytes,
+                MAX((labels->>'sessions')::bigint) AS sessions,
+                MAX(labels->>'risk') AS risk
+            FROM metric_data
+            WHERE metric_name = :metric_name
+              AND timestamp >= :start AND timestamp <= :end
+              {device_filter}
+              AND labels->>'application' IS NOT NULL
+            GROUP BY name
+            ORDER BY bytes DESC
+            LIMIT :limit_n
+        """)
+    else:
+        query = text(f"""
+            SELECT
+                labels->>'threat_name' AS name,
+                SUM(value) AS count,
+                MAX(labels->>'severity') AS severity,
+                MAX(labels->>'category') AS category
+            FROM metric_data
+            WHERE metric_name = :metric_name
+              AND timestamp >= :start AND timestamp <= :end
+              {device_filter}
+              AND labels->>'threat_name' IS NOT NULL
+            GROUP BY name
+            ORDER BY count DESC
+            LIMIT :limit_n
+        """)
+
+    result = await session.execute(query, params)
+    rows = result.fetchall()
+
+    if metric_name == "acc_application":
+        items = [
+            {"name": r.name, "bytes": float(r.bytes), "sessions": int(r.sessions or 0), "risk": r.risk or ""}
+            for r in rows
+        ]
+    else:
+        items = [
+            {"name": r.name, "count": float(r.count), "severity": r.severity or "", "category": r.category or ""}
+            for r in rows
+        ]
+
+    return {"metric_name": metric_name, "items": items}
+
+
 def _def_to_dict(m: MetricDefinition) -> dict:
     return {
         "id": m.id,

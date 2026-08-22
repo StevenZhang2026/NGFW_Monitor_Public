@@ -1,8 +1,25 @@
 from abc import ABC, abstractmethod
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+
+from app.config import settings
 from app.models.alert import AlertType
+
+
+@asynccontextmanager
+async def _get_session():
+    engine = create_async_engine(
+        settings.database_url, echo=False, pool_size=1, max_overflow=0, pool_pre_ping=True
+    )
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            yield session
+    finally:
+        await engine.dispose()
 
 
 @dataclass
@@ -26,14 +43,13 @@ class ThresholdAlertRule(BaseAlertRule):
     alert_type = AlertType.threshold
 
     async def evaluate(self, metric_name: str, device_id: str, condition: dict) -> AlertEvaluation:
-        from app.models.database import async_session
         from sqlalchemy import text
 
         operator = condition["operator"]
         threshold = condition["value"]
         duration = condition.get("duration", 300)
 
-        async with async_session() as session:
+        async with _get_session() as session:
             query = text(f"""
                 SELECT AVG(value) as avg_val
                 FROM metric_data
@@ -67,14 +83,13 @@ class AnomalyAlertRule(BaseAlertRule):
     alert_type = AlertType.anomaly
 
     async def evaluate(self, metric_name: str, device_id: str, condition: dict) -> AlertEvaluation:
-        from app.models.database import async_session
         from sqlalchemy import text
         import numpy as np
 
         lookback_hours = condition.get("lookback_hours", 24)
         z_threshold = condition.get("z_threshold", 3.0)
 
-        async with async_session() as session:
+        async with _get_session() as session:
             query = text(f"""
                 SELECT value FROM metric_data
                 WHERE device_id = :device_id
@@ -110,14 +125,13 @@ class PredictionAlertRule(BaseAlertRule):
     alert_type = AlertType.prediction
 
     async def evaluate(self, metric_name: str, device_id: str, condition: dict) -> AlertEvaluation:
-        from app.models.database import async_session
         from sqlalchemy import text
 
         predict_hours = condition.get("predict_hours", 24)
         capacity = condition.get("capacity", 100)
         lookback_days = condition.get("lookback_days", 7)
 
-        async with async_session() as session:
+        async with _get_session() as session:
             query = text(f"""
                 SELECT timestamp as ds, value as y FROM metric_data
                 WHERE device_id = :device_id

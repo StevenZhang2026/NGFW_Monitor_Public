@@ -1,4 +1,4 @@
-from sqlalchemy import String, Boolean, Text, Enum as SAEnum
+from sqlalchemy import String, Boolean, Text, Enum as SAEnum, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 import enum
 
@@ -32,6 +32,10 @@ class Device(Base, TimestampMixin):
     api_key_encrypted: Mapped[str | None] = mapped_column(Text)
     ssh_username: Mapped[str | None] = mapped_column(String(50))
     ssh_password_encrypted: Mapped[str | None] = mapped_column(Text)
+
+    group_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("device_groups.id", ondelete="SET NULL"), nullable=True
+    )
 
     status: Mapped[DeviceStatus] = mapped_column(SAEnum(DeviceStatus), default=DeviceStatus.unknown)
     collect_enabled: Mapped[bool] = mapped_column(Boolean, default=True)

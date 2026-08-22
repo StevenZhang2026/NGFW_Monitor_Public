@@ -7,6 +7,7 @@ celery_app = Celery("ngfw_monitor", broker=settings.redis_url, backend=settings.
 import app.collectors.panos_api  # noqa: E402, F401
 import app.collectors.panos_ssh  # noqa: E402, F401
 import app.collectors.panorama  # noqa: E402, F401
+import app.collectors.panos_report  # noqa: E402, F401
 import app.collectors.file_upload  # noqa: E402, F401
 
 celery_app.conf.update(

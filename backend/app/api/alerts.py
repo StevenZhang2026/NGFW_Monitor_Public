@@ -7,6 +7,7 @@ from app.models.database import get_session
 from app.models.alert import AlertRule, AlertEvent, AlertType, Severity, AlertStatus
 from app.models.user import User, UserRole
 from app.auth.security import get_current_user, require_role
+from app.auth.scope import get_scoped_device_ids
 
 router = APIRouter()
 
@@ -124,6 +125,11 @@ async def list_events(
     user: User = Depends(get_current_user),
 ):
     query = select(AlertEvent).order_by(AlertEvent.triggered_at.desc())
+
+    scoped_ids = await get_scoped_device_ids(user, session)
+    if scoped_ids is not None:
+        query = query.where(AlertEvent.device_id.in_(scoped_ids))
+
     if severity:
         query = query.where(AlertEvent.severity == Severity(severity))
     if status:

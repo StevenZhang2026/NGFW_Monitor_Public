@@ -34,7 +34,7 @@ def collect_device(device_id: str):
 
 async def _collect_device(device_id: str):
     from datetime import datetime, timezone
-    from sqlalchemy import select
+    from sqlalchemy import select, func
     from app.models.device import Device, DeviceStatus
     from app.models.metric import MetricDefinition, MetricData
 
@@ -53,10 +53,23 @@ async def _collect_device(device_id: str):
 
         api_metrics = [m for m in metrics if m.collector == 'panos_api']
         ssh_metrics = [m for m in metrics if m.collector == 'panos_ssh']
+        report_metrics_all = [m for m in metrics if m.collector == 'panos_report']
+        report_metrics = []
+        for m in report_metrics_all:
+            last = (await session.execute(
+                select(func.max(MetricData.timestamp)).where(
+                    MetricData.device_id == device_id,
+                    MetricData.metric_name == m.name,
+                )
+            )).scalar()
+            if last is None or (datetime.now(timezone.utc) - last).total_seconds() >= m.interval:
+                report_metrics.append(m)
 
         has_success = False
+        has_attempt = False
 
         if api_metrics and device.api_key_encrypted:
+            has_attempt = True
             results = await _collect_api_batch(device, api_metrics)
             for result in results:
                 if result.success:
@@ -73,6 +86,7 @@ async def _collect_device(device_id: str):
                     ))
 
         if ssh_metrics and device.ssh_username:
+            has_attempt = True
             results = await _collect_ssh_batch(device, ssh_metrics)
             for result in results:
                 if result.success:
@@ -88,9 +102,25 @@ async def _collect_device(device_id: str):
                         labels=result.labels or None,
                     ))
 
+        if report_metrics and device.api_key_encrypted:
+            has_attempt = True
+            results = await _collect_report_batch(device, report_metrics)
+            for result in results:
+                if result.success:
+                    has_success = True
+                    session.add(MetricData(
+                        timestamp=result.timestamp,
+                        device_id=result.device_id,
+                        metric_name=result.metric_name,
+                        value=result.value,
+                        labels=result.labels or None,
+                    ))
+
         if has_success:
             device.status = DeviceStatus.online
             device.last_seen = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        elif has_attempt:
+            device.status = DeviceStatus.offline
 
         await session.commit()
 
@@ -123,6 +153,22 @@ async def _collect_api_batch(device, metrics) -> list[MetricResult]:
     except Exception as e:
         for metric_def in metrics:
             results.append(MetricResult.failure(device.id, metric_def.name, f"Connection failed: {e}"))
+    return results
+
+
+async def _collect_report_batch(device, metrics) -> list[MetricResult]:
+    """Collect Report API metrics (ACC data) using a single HTTPS connection."""
+    from app.collectors.registry import collector_registry
+    collector = collector_registry.get("panos_report")
+    if not collector:
+        return [MetricResult.failure(device.id, m.name, "panos_report collector not found") for m in metrics]
+    results = []
+    for metric_def in metrics:
+        try:
+            batch = await collector.collect(device, metric_def)
+            results.extend(batch)
+        except Exception as e:
+            results.append(MetricResult.failure(device.id, metric_def.name, str(e)))
     return results
 
 

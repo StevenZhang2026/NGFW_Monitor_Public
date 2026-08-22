@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.api import auth, devices, metrics, alerts, notifications, upload, system
+from app.api import auth, devices, metrics, alerts, notifications, upload, system, users, device_groups
 
 
 @asynccontextmanager
@@ -13,6 +13,7 @@ async def lifespan(app: FastAPI):
     import app.collectors.panos_api  # noqa: F401
     import app.collectors.panos_ssh  # noqa: F401
     import app.collectors.panorama  # noqa: F401
+    import app.collectors.panos_report  # noqa: F401
     import app.collectors.file_upload  # noqa: F401
 
     # Startup: init DB, create admin user, load builtin metrics
@@ -43,6 +44,8 @@ app.include_router(alerts.router, prefix="/api/v1/alerts", tags=["alerts"])
 app.include_router(notifications.router, prefix="/api/v1/notifications", tags=["notifications"])
 app.include_router(upload.router, prefix="/api/v1/upload", tags=["upload"])
 app.include_router(system.router, prefix="/api/v1/system", tags=["system"])
+app.include_router(users.router, prefix="/api/v1/users", tags=["users"])
+app.include_router(device_groups.router, prefix="/api/v1/device-groups", tags=["device-groups"])
 
 
 @app.get("/health")

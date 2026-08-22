@@ -155,3 +155,41 @@
   interval_min: 30
   interval_max: 300
   chart_type: line
+
+- name: acc_application
+  display_name: "应用流量 (ACC)"
+  category: acc
+  collector: panos_report
+  command: ""
+  parser:
+    report_name: "top-applications"
+    period: "last-hour"
+    value_field: "nbytes"
+    name_field: "name"
+    label_name: "application"
+    extra_fields: ["risk", "ncsessions", "nthreats"]
+  data_type: gauge
+  unit: "KB"
+  interval: 3600
+  interval_min: 900
+  interval_max: 86400
+  chart_type: area
+
+- name: acc_threat
+  display_name: "威胁统计 (ACC)"
+  category: acc
+  collector: panos_report
+  command: ""
+  parser:
+    report_name: "top-spyware-threats"
+    period: "last-hour"
+    value_field: "count"
+    name_field: "name"
+    label_name: "threat_name"
+    extra_fields: ["severity", "subtype", "category"]
+  data_type: gauge
+  unit: "count"
+  interval: 3600
+  interval_min: 900
+  interval_max: 86400
+  chart_type: line
