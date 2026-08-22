@@ -12,11 +12,16 @@ from app.auth.password_policy import validate_password
 router = APIRouter()
 
 
+from typing import Literal
+
+VALID_ROLES = Literal["admin", "operator", "viewer"]
+
+
 class UserCreate(BaseModel):
     username: str
     email: str
     password: str
-    role: str = "viewer"
+    role: VALID_ROLES = "viewer"
     group_ids: list[str] = []
 
 
@@ -24,7 +29,7 @@ class UserUpdate(BaseModel):
     username: str | None = None
     email: str | None = None
     password: str | None = None
-    role: str | None = None
+    role: VALID_ROLES | None = None
     is_active: bool | None = None
     group_ids: list[str] | None = None
 

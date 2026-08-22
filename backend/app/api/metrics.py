@@ -9,6 +9,7 @@ from app.models.database import get_session
 from app.models.metric import MetricDefinition
 from app.models.user import User, UserRole
 from app.auth.security import get_current_user, require_role
+from app.auth.scope import check_device_in_scope
 
 router = APIRouter()
 
@@ -249,6 +250,9 @@ async def query_acc_trend(
     if metric_name not in ("acc_application", "acc_threat"):
         raise HTTPException(status_code=400, detail="metric_name must be acc_application or acc_threat")
 
+    if device_id and not await check_device_in_scope(device_id, user, session):
+        raise HTTPException(status_code=403, detail="No access to this device")
+
     if not end:
         end = datetime.now(timezone.utc)
     if not start:
@@ -261,14 +265,16 @@ async def query_acc_trend(
     if device_id:
         params["device_id"] = device_id
 
+    VALID_SEVERITIES = {"critical", "high", "medium", "low", "informational"}
     severity_filter = ""
     severity_order = ""
     if metric_name == "acc_threat" and severity:
-        sev_list = [s.strip() for s in severity.split(",") if s.strip()]
-        sev_in = ", ".join(f"'{s}'" for s in sev_list)
-        severity_filter = f"AND labels->>'severity' IN ({sev_in})"
-        case_lines = "\n".join(f"WHEN '{s}' THEN {i}" for i, s in enumerate(sev_list))
-        severity_order = f"CASE MIN(labels->>'severity') {case_lines} END,"
+        sev_list = [s.strip() for s in severity.split(",") if s.strip() and s.strip() in VALID_SEVERITIES]
+        if sev_list:
+            severity_filter = "AND labels->>'severity' = ANY(:severities)"
+            params["severities"] = sev_list
+            case_lines = " ".join(f"WHEN '{s}' THEN {i}" for i, s in enumerate(sev_list))
+            severity_order = f"CASE MIN(labels->>'severity') {case_lines} END,"
 
     top_query = text(f"""
         SELECT labels->>'{label_key}' AS item_name, SUM(value) AS total
@@ -314,6 +320,8 @@ async def query_acc_trend(
     series_params: dict = {"metric_name": metric_name, "start": start, "end": end, "items": top_items}
     if device_id:
         series_params["device_id"] = device_id
+    if "severities" in params:
+        series_params["severities"] = params["severities"]
     result = await session.execute(series_query, series_params)
     rows = result.fetchall()
 
@@ -344,6 +352,9 @@ async def query_acc_ranking(
 
     if metric_name not in ("acc_application", "acc_threat"):
         raise HTTPException(status_code=400, detail="metric_name must be acc_application or acc_threat")
+
+    if device_id and not await check_device_in_scope(device_id, user, session):
+        raise HTTPException(status_code=403, detail="No access to this device")
 
     if not end:
         end = datetime.now(timezone.utc)

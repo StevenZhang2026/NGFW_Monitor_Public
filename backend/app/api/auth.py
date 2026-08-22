@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +13,9 @@ from app.auth.security import (
     get_current_user,
 )
 from app.auth.password_policy import validate_password
+
+LOGIN_MAX_ATTEMPTS = 5
+LOGIN_WINDOW_SECONDS = 300
 
 router = APIRouter()
 
@@ -30,15 +33,44 @@ class TokenResponse(BaseModel):
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(req: LoginRequest, session: AsyncSession = Depends(get_session)):
+async def login(req: LoginRequest, request: Request, session: AsyncSession = Depends(get_session)):
+    import redis
+    from app.config import settings
+
+    client_ip = request.client.host if request.client else "unknown"
+    rate_key = f"login_attempts:{client_ip}:{req.username}"
+    try:
+        r = redis.from_url(settings.redis_url, decode_responses=True)
+        attempts = int(r.get(rate_key) or 0)
+        if attempts >= LOGIN_MAX_ATTEMPTS:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"登录尝试过多，请 {LOGIN_WINDOW_SECONDS // 60} 分钟后重试",
+            )
+    except redis.RedisError:
+        pass
+
     result = await session.execute(select(User).where(User.username == req.username))
     user = result.scalar_one_or_none()
     if not user or not verify_password(req.password, user.hashed_password):
+        try:
+            r = redis.from_url(settings.redis_url, decode_responses=True)
+            pipe = r.pipeline()
+            pipe.incr(rate_key)
+            pipe.expire(rate_key, LOGIN_WINDOW_SECONDS)
+            pipe.execute()
+        except redis.RedisError:
+            pass
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account disabled")
 
-    from app.config import settings
+    try:
+        r = redis.from_url(settings.redis_url, decode_responses=True)
+        r.delete(rate_key)
+    except redis.RedisError:
+        pass
+
     return TokenResponse(
         access_token=create_access_token(user.id, user.role.value),
         refresh_token=create_refresh_token(user.id),
