@@ -59,7 +59,7 @@ async def _collect_device(device_id: str):
             last = (await session.execute(
                 select(func.max(MetricData.timestamp)).where(
                     MetricData.device_id == device_id,
-                    MetricData.metric_name == m.name,
+                    MetricData.metric_name.like(f"{m.name}::%"),
                 )
             )).scalar()
             if last is None or (datetime.now(timezone.utc) - last).total_seconds() >= m.interval:

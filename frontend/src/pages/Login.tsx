@@ -18,7 +18,7 @@ function Login() {
 
   return (
     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: '#f0f2f5' }}>
-      <Card title="NGFW Monitor 登录" style={{ width: 400 }}>
+      <Card title="防火墙集中监控系统" style={{ width: 400 }}>
         <Form onFinish={onFinish} layout="vertical">
           <Form.Item name="username" label="用户名" rules={[{ required: true }]}>
             <Input />

@@ -1,8 +1,11 @@
 import { useState, useEffect } from 'react'
-import { Upload as AntUpload, Button, Select, Form, Card, Table, Tag, Tabs, Space, Row, Col, Modal, message, Result } from 'antd'
+import { Upload as AntUpload, Button, Select, Form, Card, Table, Tag, Tabs, Space, Row, Col, Modal, message, Result, DatePicker } from 'antd'
 import { UploadOutlined } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
+import dayjs from 'dayjs'
 import client from '../api/client'
+
+const { RangePicker } = DatePicker
 
 function formatKB(kb: number): string {
   if (kb >= 1e6) return (kb / 1e6).toFixed(1) + ' GB'
@@ -14,6 +17,7 @@ const TIME_RANGES = [
   { value: '24h', label: '最近24小时' },
   { value: '7d', label: '最近1周' },
   { value: '30d', label: '最近1月' },
+  { value: 'custom', label: '自定义' },
 ]
 
 const RANGE_MS: Record<string, number> = {
@@ -34,6 +38,7 @@ function Upload() {
   const [devices, setDevices] = useState<any[]>([])
   const [selectedDevice, setSelectedDevice] = useState<string>('')
   const [timeRange, setTimeRange] = useState<string>('7d')
+  const [customRange, setCustomRange] = useState<[dayjs.Dayjs, dayjs.Dayjs] | null>(null)
   const [appTrend, setAppTrend] = useState<any>(null)
   const [threatTrend, setThreatTrend] = useState<any>(null)
   const [appRanking, setAppRanking] = useState<any[]>([])
@@ -54,8 +59,15 @@ function Upload() {
 
   useEffect(() => {
     if (!selectedDevice) return
-    const end = new Date().toISOString()
-    const start = new Date(Date.now() - RANGE_MS[timeRange]).toISOString()
+    let start: string, end: string
+    if (timeRange === 'custom') {
+      if (!customRange) return
+      start = customRange[0].startOf('day').toISOString()
+      end = customRange[1].endOf('day').toISOString()
+    } else {
+      end = new Date().toISOString()
+      start = new Date(Date.now() - RANGE_MS[timeRange]).toISOString()
+    }
     const params: any = { start, end, device_id: selectedDevice }
 
     client.get('/metrics/acc-trend', { params: { ...params, metric_name: 'acc_application', top_n: 10 } })
@@ -69,7 +81,7 @@ function Upload() {
 
     client.get('/metrics/acc-ranking', { params: { ...params, metric_name: 'acc_threat', limit: 50 } })
       .then(res => setThreatRanking(res.data.items)).catch(() => setThreatRanking([]))
-  }, [selectedDevice, timeRange])
+  }, [selectedDevice, timeRange, customRange])
 
   const handleUpload = async (values: any) => {
     const formData = new FormData()
@@ -209,7 +221,14 @@ function Upload() {
             options={devices.map(d => ({ label: d.name, value: d.id }))}
             placeholder="选择设备"
           />
-          <Select style={{ width: 130 }} value={timeRange} onChange={setTimeRange} options={TIME_RANGES} />
+          <Select style={{ width: 130 }} value={timeRange} onChange={(v) => { setTimeRange(v); if (v !== 'custom') setCustomRange(null) }} options={TIME_RANGES} />
+          {timeRange === 'custom' && (
+            <RangePicker
+              value={customRange}
+              onChange={(dates) => setCustomRange(dates as [dayjs.Dayjs, dayjs.Dayjs] | null)}
+              allowClear={false}
+            />
+          )}
           <Button icon={<UploadOutlined />} onClick={() => { setUploadModalOpen(true); setUploadResult(null) }}>
             导入数据
           </Button>
@@ -246,7 +265,7 @@ function Upload() {
                     columns={appColumns}
                     rowKey="name"
                     size="small"
-                    pagination={{ pageSize: 20, showSizeChanger: true, showTotal: t => `共 ${t} 条` }}
+                    pagination={{ defaultPageSize: 20, pageSizeOptions: ['10', '20', '50', '100'], showSizeChanger: true, showTotal: t => `共 ${t} 条` }}
                   />
                 </Card>
               </>
@@ -279,7 +298,7 @@ function Upload() {
                     columns={threatColumns}
                     rowKey="name"
                     size="small"
-                    pagination={{ pageSize: 20, showSizeChanger: true, showTotal: t => `共 ${t} 条` }}
+                    pagination={{ defaultPageSize: 20, pageSizeOptions: ['10', '20', '50', '100'], showSizeChanger: true, showTotal: t => `共 ${t} 条` }}
                   />
                 </Card>
               </>

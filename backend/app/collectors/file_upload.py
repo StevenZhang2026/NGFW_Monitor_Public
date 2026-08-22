@@ -47,7 +47,7 @@ class FileUploadCollector(BaseCollector):
                 labels["risk"] = row["Risk"]
             if "Threats" in row:
                 labels["threats"] = row["Threats"]
-            return "acc_application", bytes_val, labels
+            return f"acc_application::{app_name}", bytes_val, labels
 
         elif data_type == "threat":
             threat_name = (
@@ -66,7 +66,7 @@ class FileUploadCollector(BaseCollector):
                 labels["category"] = row.get("Threat Category") or row.get("threat-type", "")
             if "ID" in row:
                 labels["threat_id"] = row["ID"]
-            return "acc_threat", count_val, labels
+            return f"acc_threat::{threat_name}", count_val, labels
 
         else:
             value = self._to_float(

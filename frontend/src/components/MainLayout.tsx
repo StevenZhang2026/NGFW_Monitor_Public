@@ -127,8 +127,8 @@ function MainLayout() {
   return (
     <Layout style={{ minHeight: '100vh' }}>
       <Sider collapsible collapsed={collapsed} onCollapse={setCollapsed}>
-        <div style={{ height: 32, margin: 16, color: '#fff', textAlign: 'center', fontSize: 16, fontWeight: 'bold' }}>
-          {collapsed ? 'FW' : 'NGFW Monitor'}
+        <div style={{ height: 32, margin: 16, color: '#fff', textAlign: 'center', fontSize: collapsed ? 16 : 14, fontWeight: 'bold', whiteSpace: 'nowrap', overflow: 'hidden' }}>
+          {collapsed ? 'FW' : '防火墙集中监控系统'}
         </div>
         <Menu
           theme="dark"

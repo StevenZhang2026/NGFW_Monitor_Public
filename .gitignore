@@ -28,3 +28,6 @@ Thumbs.db
 # TLS certificates
 certs/*.key
 certs/*.crt
+
+# Backups
+backups/

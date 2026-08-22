@@ -63,7 +63,7 @@ function Dashboard() {
     client.get('/metrics/acc-trend', { params: { ...accParams, metric_name: 'acc_application' } })
       .then(res => setAppTrend(res.data)).catch(() => setAppTrend(null))
 
-    client.get('/metrics/acc-trend', { params: { ...accParams, metric_name: 'acc_threat', severity: 'critical,high' } })
+    client.get('/metrics/acc-trend', { params: { ...accParams, metric_name: 'acc_threat' } })
       .then(res => setThreatTrend(res.data)).catch(() => setThreatTrend(null))
   }, [selectedDevice, timeRange])
 

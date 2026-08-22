@@ -162,12 +162,8 @@
   collector: panos_report
   command: ""
   parser:
-    report_name: "top-applications"
-    period: "last-hour"
-    value_field: "nbytes"
-    name_field: "name"
-    label_name: "application"
-    extra_fields: ["risk", "ncsessions", "nthreats"]
+    log_type: "traffic"
+    lookback_seconds: 3600
   data_type: gauge
   unit: "KB"
   interval: 3600
@@ -181,12 +177,8 @@
   collector: panos_report
   command: ""
   parser:
-    report_name: "top-spyware-threats"
-    period: "last-hour"
-    value_field: "count"
-    name_field: "name"
-    label_name: "threat_name"
-    extra_fields: ["severity", "subtype", "category"]
+    log_type: "threat"
+    lookback_seconds: 3600
   data_type: gauge
   unit: "count"
   interval: 3600

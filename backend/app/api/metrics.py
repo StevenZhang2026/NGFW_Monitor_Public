@@ -261,7 +261,7 @@ async def query_acc_trend(
     label_key = "application" if metric_name == "acc_application" else "threat_name"
 
     device_filter = "AND device_id = :device_id" if device_id else ""
-    params: dict = {"metric_name": metric_name, "start": start, "end": end}
+    params: dict = {"metric_prefix": f"{metric_name}::%", "start": start, "end": end}
     if device_id:
         params["device_id"] = device_id
 
@@ -279,7 +279,7 @@ async def query_acc_trend(
     top_query = text(f"""
         SELECT labels->>'{label_key}' AS item_name, SUM(value) AS total
         FROM metric_data
-        WHERE metric_name = :metric_name
+        WHERE metric_name LIKE :metric_prefix
           AND timestamp >= :start AND timestamp <= :end
           {device_filter}
           {severity_filter}
@@ -309,7 +309,7 @@ async def query_acc_trend(
             labels->>'{label_key}' AS item_name,
             SUM(value) AS total
         FROM metric_data
-        WHERE metric_name = :metric_name
+        WHERE metric_name LIKE :metric_prefix
           AND timestamp >= :start AND timestamp <= :end
           {device_filter}
           {severity_filter}
@@ -317,7 +317,7 @@ async def query_acc_trend(
         GROUP BY ts, item_name
         ORDER BY ts
     """)
-    series_params: dict = {"metric_name": metric_name, "start": start, "end": end, "items": top_items}
+    series_params: dict = {"metric_prefix": f"{metric_name}::%", "start": start, "end": end, "items": top_items}
     if device_id:
         series_params["device_id"] = device_id
     if "severities" in params:
@@ -362,7 +362,7 @@ async def query_acc_ranking(
         start = end - timedelta(days=7)
 
     device_filter = "AND device_id = :device_id" if device_id else ""
-    params: dict = {"metric_name": metric_name, "start": start, "end": end, "limit_n": limit}
+    params: dict = {"metric_prefix": f"{metric_name}::%", "start": start, "end": end, "limit_n": limit}
     if device_id:
         params["device_id"] = device_id
 
@@ -374,7 +374,7 @@ async def query_acc_ranking(
                 MAX((labels->>'sessions')::bigint) AS sessions,
                 MAX(labels->>'risk') AS risk
             FROM metric_data
-            WHERE metric_name = :metric_name
+            WHERE metric_name LIKE :metric_prefix
               AND timestamp >= :start AND timestamp <= :end
               {device_filter}
               AND labels->>'application' IS NOT NULL
@@ -390,7 +390,7 @@ async def query_acc_ranking(
                 MAX(labels->>'severity') AS severity,
                 MAX(labels->>'category') AS category
             FROM metric_data
-            WHERE metric_name = :metric_name
+            WHERE metric_name LIKE :metric_prefix
               AND timestamp >= :start AND timestamp <= :end
               {device_filter}
               AND labels->>'threat_name' IS NOT NULL
