@@ -47,19 +47,22 @@
 - [x] ACC 实时采集重构（Log Query API 替代 Report API，时间戳对齐整点）
 - [x] 安装工具套件（install/upgrade/uninstall/status 脚本 + INSTALL.md）
 - [x] 报表模块（周报/月报自动生成 PDF、趋势分析+容量预测、邮件推送、Web 管理）
-- [ ] 告警体系端到端验证（触发→通知→恢复）
+- [x] 告警体系优化（通知冷却、活跃告警计数、批量确认、飞书通知已验证）
+- [x] AI Copilot 助手（自然语言查询、LLM 意图解析、模板格式化、模型可配置）
+- [x] ACC 图表修复（趋势图 tooltip 时间轴对齐、趋势图/饼图颜色统一）
+- [x] 交互式系统架构图（archify 生成）
 - [ ] Panorama 设备发现
 - [ ] 数据保留策略自动执行
 - [ ] 多设备接入验证
 
 ## 下一步
 
-1. 告警规则端到端验证（配置阈值规则 → 触发 → 收到通知 → 恢复通知）
-2. 报表邮件端到端验证（配置 SMTP → 自动发送 → 收件人收到 PDF）
-3. 接入更多设备（PA-5500/PA-7000 系列）验证兼容性
-4. 数据保留策略自动执行（TimescaleDB retention policy）
-5. Panorama 设备自动发现
-6. 性能调优（采集间隔精细控制、worker 并发优化）
+1. 报表邮件端到端验证（配置 SMTP → 自动发送 → 收件人收到 PDF）
+2. 接入更多设备（PA-5500/PA-7000 系列）验证兼容性
+3. 数据保留策略自动执行（TimescaleDB retention policy）
+4. Panorama 设备自动发现
+5. 性能调优（采集间隔精细控制、worker 并发优化）
+6. Copilot 能力扩展（支持更多查询类型、多轮对话）
 
 ## 常用命令
 
@@ -92,11 +95,13 @@ docker compose logs worker --tail 20 -f
 - `backend/app/metrics/parser.py` — 通用解析器（xpath, xpath_multi, regex, regex_multi, regex_cdata）
 - `backend/app/alerts/` — 告警引擎（threshold/anomaly/prediction）+ 通知渠道（feishu/wechat/email）
 - `backend/app/auth/` — 认证鉴权（JWT, password_policy, scope 权限过滤）
-- `backend/app/api/` — REST API 路由（devices, metrics, alerts, auth, users, device_groups, upload, reports）
+- `backend/app/copilot/` — AI Copilot 模块（intent 意图解析, formatter 结果格式化）
+- `backend/app/api/` — REST API 路由（devices, metrics, alerts, auth, users, device_groups, upload, reports, copilot）
 - `backend/app/models/` — 数据模型（device, device_group, metric, alert, user, report）
 - `backend/app/reports/` — 报表生成（analysis 趋势分析, charts matplotlib 图表, generator PDF 生成, templates HTML 模板）
 - `backend/app/tasks/report.py` — 报表调度任务（生成 + 邮件发送）
-- `frontend/src/pages/` — 前端页面（Dashboard, Devices, Metrics, Alerts, Settings, Upload/ACC, Users, Reports）
+- `backend/app/models/setting.py` — 系统设置模型（key-value 存储，用于 AI 配置等动态设置）
+- `frontend/src/pages/` — 前端页面（Dashboard, Devices, Metrics, Alerts, Settings, Upload/ACC, Users, Reports, Copilot）
 - `scripts/` — 运维工具（install.sh, upgrade.sh, uninstall.sh, status.sh）
 - `certs/` — 自签名 TLS 证书（.gitignore）
 - `docs/` — 架构文档和 API 规范

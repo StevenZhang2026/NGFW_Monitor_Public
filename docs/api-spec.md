@@ -462,3 +462,55 @@ Authorization: Bearer <token>
 
 ### GET /reports/history/{id}/download
 下载报表 PDF 文件。返回 `application/pdf` 二进制流。
+
+---
+
+## AI Copilot
+
+### POST /copilot/chat
+AI 助手对话接口。接收自然语言问题，返回格式化的查询结果。
+
+**Request Body:**
+```json
+{
+  "message": "最近3天威胁 Top 10"
+}
+```
+
+**Response:**
+```json
+{
+  "reply": "**最近3天的威胁排名前10**\n\n| # | 威胁名称 | 次数 |\n|---|---|---|\n| 1 | Malicious_NRD:redmid.com | 1770 次 |\n..."
+}
+```
+
+**支持的查询类型:**
+- 应用/威胁排名：`acc_ranking`
+- 应用/威胁趋势：`acc_trend`
+- 设备指标数据（CPU、内存、会话数等）：`metric_data`
+- 告警事件：`alert_events`
+- 设备状态概览：`device_status`
+
+### GET /system/ai-settings
+获取 AI 模型配置（仅 admin）。
+
+**Response:**
+```json
+{
+  "api_base": "https://api.deepseek.com",
+  "api_key": "sk-***",
+  "model": "deepseek-chat"
+}
+```
+
+### PUT /system/ai-settings
+更新 AI 模型配置（仅 admin）。支持任何兼容 OpenAI Chat Completions API 格式的服务。
+
+**Request Body:**
+```json
+{
+  "api_base": "https://api.deepseek.com",
+  "api_key": "sk-your-key",
+  "model": "deepseek-chat"
+}
+```
