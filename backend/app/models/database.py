@@ -41,6 +41,7 @@ async def get_session() -> AsyncSession:
 async def init_db():
     from sqlalchemy import text
     from app.models import User, Device, MetricDefinition, MetricData, AlertRule, AlertEvent, NotificationChannel  # noqa: F401
+    from app.models.setting import SystemSetting  # noqa: F401
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

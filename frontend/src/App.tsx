@@ -11,6 +11,7 @@ import Upload from './pages/Upload'
 import Settings from './pages/Settings'
 import Users from './pages/Users'
 import Reports from './pages/Reports'
+import Copilot from './pages/Copilot'
 
 function App() {
   return (
@@ -26,6 +27,7 @@ function App() {
           <Route path="upload" element={<Upload />} />
           <Route path="reports" element={<Reports />} />
           <Route path="users" element={<Users />} />
+          <Route path="copilot" element={<Copilot />} />
           <Route path="settings" element={<Settings />} />
         </Route>
       </Routes>

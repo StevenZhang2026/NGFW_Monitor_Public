@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import String, Boolean, DateTime, Text, JSON, Enum as SAEnum
+from sqlalchemy import String, Boolean, DateTime, Text, JSON, Integer, Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column
 import enum
 
@@ -36,6 +36,7 @@ class AlertRule(Base, TimestampMixin):
     condition: Mapped[dict] = mapped_column(JSON)
     severity: Mapped[Severity] = mapped_column(SAEnum(Severity), default=Severity.warning)
     notification_channel_ids: Mapped[list] = mapped_column(JSON, default=list)
+    notify_interval: Mapped[int] = mapped_column(Integer, default=30, server_default="30")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
 

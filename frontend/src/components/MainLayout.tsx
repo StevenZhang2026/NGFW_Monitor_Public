@@ -14,6 +14,7 @@ import {
   LogoutOutlined,
   KeyOutlined,
   DownOutlined,
+  RobotOutlined,
 } from '@ant-design/icons'
 import client from '../api/client'
 
@@ -48,6 +49,7 @@ const ALL_MENU_ITEMS = [
   { key: '/alerts', icon: <AlertOutlined />, label: '告警管理', roles: ['admin', 'operator'] },
   { key: '/upload', icon: <UploadOutlined />, label: 'ACC 数据', roles: ['admin', 'operator', 'viewer'] },
   { key: '/reports', icon: <FileTextOutlined />, label: '报表管理', roles: ['admin', 'operator'] },
+  { key: '/copilot', icon: <RobotOutlined />, label: 'AI 助手', roles: ['admin', 'operator'] },
   { key: '/users', icon: <TeamOutlined />, label: '用户管理', roles: ['admin'] },
   { key: '/settings', icon: <SettingOutlined />, label: '系统设置', roles: ['admin'] },
 ]

@@ -41,6 +41,7 @@ function Settings() {
   const [sysSettings, setSysSettings] = useState<any>(null)
   const [collectors, setCollectors] = useState<string[]>([])
   const [metricDefs, setMetricDefs] = useState<any[]>([])
+  const [aiForm] = Form.useForm()
 
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<any>(null)
@@ -53,6 +54,19 @@ function Settings() {
     client.get('/system/settings').then(res => setSysSettings(res.data))
     client.get('/system/collectors').then(res => setCollectors(res.data.collectors))
     client.get('/metrics/definitions').then(res => setMetricDefs(res.data.items))
+    client.get('/system/ai-settings').then(res => {
+      aiForm.setFieldsValue(res.data)
+    }).catch(() => {})
+  }
+
+  const saveAiSettings = async () => {
+    const values = await aiForm.validateFields()
+    try {
+      await client.put('/system/ai-settings', values)
+      message.success('AI 配置已保存')
+          } catch (e: any) {
+      message.error(e.response?.data?.detail || '保存失败')
+    }
   }
 
   useEffect(() => { loadData() }, [])
@@ -297,6 +311,29 @@ function Settings() {
                 </div>
               </Card>
             </div>
+          ),
+        },
+        {
+          key: 'ai',
+          label: 'AI 助手',
+          children: (
+            <Card title="AI 模型配置" extra={<Button type="primary" onClick={saveAiSettings}>保存</Button>}>
+              <Form form={aiForm} layout="vertical" style={{ maxWidth: 500 }}>
+                <Form.Item name="api_base" label="API Base URL" tooltip="兼容 OpenAI 格式的 API 地址">
+                  <Input placeholder="如: https://api.deepseek.com/v1" />
+                </Form.Item>
+                <Form.Item name="api_key" label="API Key">
+                  <Input.Password placeholder="sk-..." />
+                </Form.Item>
+                <Form.Item name="model" label="模型名称">
+                  <Input placeholder="如: deepseek-chat, gpt-4o-mini" />
+                </Form.Item>
+              </Form>
+              <div style={{ color: '#888', fontSize: 13, marginTop: 8 }}>
+                配置后可在「AI 助手」页面使用自然语言查询设备状态、威胁排名等信息。
+                支持任何兼容 OpenAI Chat Completions API 格式的服务（DeepSeek、OpenAI、Ollama 等）。
+              </div>
+            </Card>
           ),
         },
         {

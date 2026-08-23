@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.tasks import celery_app
 from app.tasks.collect import _get_session
@@ -13,7 +13,7 @@ def evaluate_alerts():
 
 
 async def _evaluate_alerts():
-    from sqlalchemy import select
+    from sqlalchemy import select, func
     from app.models.alert import AlertRule, AlertEvent, AlertStatus, Severity
     from app.models.notification import NotificationChannel
     from app.models.device import Device
@@ -50,6 +50,19 @@ async def _evaluate_alerts():
                         triggered_at=datetime.now(timezone.utc),
                     )
                     session.add(event)
+
+                    cooldown_minutes = rule.notify_interval or 30
+                    cutoff = datetime.now(timezone.utc) - timedelta(minutes=cooldown_minutes)
+                    recent_count = (await session.execute(
+                        select(func.count(AlertEvent.id)).where(
+                            AlertEvent.rule_id == rule.id,
+                            AlertEvent.device_id == device_id,
+                            AlertEvent.triggered_at > cutoff,
+                        )
+                    )).scalar_one()
+
+                    if recent_count > 0:
+                        continue
 
                     for channel_id in rule.notification_channel_ids:
                         channel = (await session.execute(

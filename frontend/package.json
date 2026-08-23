@@ -17,7 +17,9 @@
     "echarts": "^5.5.0",
     "echarts-for-react": "^3.0.2",
     "axios": "^1.7.0",
-    "dayjs": "^1.11.0"
+    "dayjs": "^1.11.0",
+    "react-markdown": "^9.0.0",
+    "remark-gfm": "^4.0.0"
   },
   "devDependencies": {
     "@types/react": "^18.3.0",

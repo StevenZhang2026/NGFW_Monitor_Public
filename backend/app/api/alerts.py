@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import get_session
@@ -20,6 +20,7 @@ class AlertRuleCreate(BaseModel):
     condition: dict
     severity: str = "warning"
     notification_channel_ids: list[str] = []
+    notify_interval: int = 30
     enabled: bool = True
 
 
@@ -47,6 +48,7 @@ async def create_rule(
         condition=req.condition,
         severity=Severity(req.severity),
         notification_channel_ids=req.notification_channel_ids,
+        notify_interval=req.notify_interval,
         enabled=req.enabled,
     )
     session.add(rule)
@@ -63,6 +65,7 @@ class AlertRuleUpdate(BaseModel):
     condition: dict | None = None
     severity: str | None = None
     notification_channel_ids: list[str] | None = None
+    notify_interval: int | None = None
     enabled: bool | None = None
 
 
@@ -92,6 +95,8 @@ async def update_rule(
         rule.severity = Severity(req.severity)
     if req.notification_channel_ids is not None:
         rule.notification_channel_ids = req.notification_channel_ids
+    if req.notify_interval is not None:
+        rule.notify_interval = req.notify_interval
     if req.enabled is not None:
         rule.enabled = req.enabled
 
@@ -143,6 +148,52 @@ async def list_events(
     return {"items": [_event_to_dict(e) for e in events], "page": page, "page_size": page_size}
 
 
+@router.get("/active-count")
+async def active_alert_count(
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    query = select(func.count(AlertEvent.id)).where(AlertEvent.status == AlertStatus.firing)
+    scoped_ids = await get_scoped_device_ids(user, session)
+    if scoped_ids is not None:
+        query = query.where(AlertEvent.device_id.in_(scoped_ids))
+    count = (await session.execute(query)).scalar_one()
+    return {"count": count}
+
+
+class BatchAcknowledge(BaseModel):
+    event_ids: list[str] | None = None
+    rule_id: str | None = None
+
+
+@router.post("/events/batch-acknowledge")
+async def batch_acknowledge_events(
+    req: BatchAcknowledge,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    from datetime import datetime, timezone
+    query = select(AlertEvent).where(AlertEvent.status == AlertStatus.firing)
+    if req.event_ids:
+        query = query.where(AlertEvent.id.in_(req.event_ids))
+    elif req.rule_id:
+        query = query.where(AlertEvent.rule_id == req.rule_id)
+    else:
+        scoped_ids = await get_scoped_device_ids(user, session)
+        if scoped_ids is not None:
+            query = query.where(AlertEvent.device_id.in_(scoped_ids))
+
+    result = await session.execute(query)
+    events = result.scalars().all()
+    now = datetime.now(timezone.utc)
+    for event in events:
+        event.status = AlertStatus.acknowledged
+        event.acknowledged_at = now
+        event.acknowledged_by = user.id
+    await session.commit()
+    return {"acknowledged": len(events)}
+
+
 @router.post("/events/{event_id}/acknowledge")
 async def acknowledge_event(
     event_id: str,
@@ -171,6 +222,7 @@ def _rule_to_dict(r: AlertRule) -> dict:
         "condition": r.condition,
         "severity": r.severity.value,
         "notification_channel_ids": r.notification_channel_ids,
+        "notify_interval": r.notify_interval,
         "enabled": r.enabled,
     }
 

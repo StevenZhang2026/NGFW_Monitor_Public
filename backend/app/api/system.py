@@ -1,7 +1,10 @@
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import get_session
+from app.models.setting import SystemSetting
 from app.models.user import User, UserRole
 from app.auth.security import require_role
 from app.collectors import collector_registry
@@ -49,3 +52,49 @@ async def get_settings(user: User = Depends(require_role(UserRole.admin))):
         "collector_concurrency": settings.collector_concurrency,
         "collector_timeout": settings.collector_timeout,
     }
+
+
+class AISettingsUpdate(BaseModel):
+    api_base: str = ""
+    api_key: str = ""
+    model: str = ""
+
+
+@router.get("/ai-settings")
+async def get_ai_settings(
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_role(UserRole.admin)),
+):
+    result = await session.execute(
+        select(SystemSetting).where(SystemSetting.key.like("ai_%"))
+    )
+    settings_map = {s.key: s.value for s in result.scalars().all()}
+    return {
+        "api_base": settings_map.get("ai_api_base", ""),
+        "api_key": settings_map.get("ai_api_key", ""),
+        "model": settings_map.get("ai_model", ""),
+    }
+
+
+@router.put("/ai-settings")
+async def update_ai_settings(
+    req: AISettingsUpdate,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_role(UserRole.admin)),
+):
+    pairs = [
+        ("ai_api_base", req.api_base),
+        ("ai_api_key", req.api_key),
+        ("ai_model", req.model),
+    ]
+    for key, value in pairs:
+        result = await session.execute(
+            select(SystemSetting).where(SystemSetting.key == key)
+        )
+        setting = result.scalar_one_or_none()
+        if setting:
+            setting.value = value
+        else:
+            session.add(SystemSetting(key=key, value=value))
+    await session.commit()
+    return {"status": "ok"}

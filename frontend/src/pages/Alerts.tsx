@@ -3,7 +3,7 @@ import {
   Table, Tag, Button, Tabs, Modal, Form, Input, Select, Switch,
   InputNumber, Space, Popconfirm, message, Badge,
 } from 'antd'
-import { PlusOutlined, EditOutlined, DeleteOutlined, BellOutlined } from '@ant-design/icons'
+import { PlusOutlined, EditOutlined, DeleteOutlined, BellOutlined, CheckOutlined } from '@ant-design/icons'
 import client from '../api/client'
 
 const SEVERITY_OPTIONS = [
@@ -95,6 +95,12 @@ function Alerts() {
     loadData()
   }
 
+  const batchAcknowledge = async () => {
+    const res = await client.post('/alerts/events/batch-acknowledge', {})
+    message.success(`已批量确认 ${res.data.acknowledged} 条告警`)
+    loadData()
+  }
+
   const eventColumns = [
     {
       title: '时间', dataIndex: 'triggered_at', key: 'triggered_at', width: 180,
@@ -134,6 +140,7 @@ function Alerts() {
         type: rule.type,
         severity: rule.severity,
         notification_channel_ids: rule.notification_channel_ids,
+        notify_interval: rule.notify_interval || 30,
         enabled: rule.enabled,
         operator: rule.condition?.operator,
         threshold_value: rule.condition?.value,
@@ -171,6 +178,7 @@ function Alerts() {
       condition,
       severity: values.severity,
       notification_channel_ids: values.notification_channel_ids || [],
+      notify_interval: values.notify_interval || 30,
       enabled: values.enabled,
     }
 
@@ -449,12 +457,21 @@ function Alerts() {
           key: 'events',
           label: '告警事件',
           children: (
-            <Table
-              columns={eventColumns}
-              dataSource={events}
-              rowKey="id"
-              pagination={{ pageSize: 20 }}
-            />
+            <>
+              <div style={{ marginBottom: 16 }}>
+                <Popconfirm title="确认全部活跃告警？" onConfirm={batchAcknowledge}>
+                  <Button icon={<CheckOutlined />} disabled={!events.some(e => e.status === 'firing')}>
+                    全部确认
+                  </Button>
+                </Popconfirm>
+              </div>
+              <Table
+                columns={eventColumns}
+                dataSource={events}
+                rowKey="id"
+                pagination={{ pageSize: 20 }}
+              />
+            </>
           ),
         },
         {
@@ -530,6 +547,9 @@ function Alerts() {
               options={channels.map((c: any) => ({ label: `${c.name} (${CHANNEL_TYPES.find(t => t.value === c.type)?.label || c.type})`, value: c.id }))}
               allowClear
             />
+          </Form.Item>
+          <Form.Item name="notify_interval" label="通知冷却 (分钟)" tooltip="同一规则+设备在此时间内不重复发送通知" initialValue={30}>
+            <InputNumber min={1} max={1440} addonAfter="分钟" style={{ width: '100%' }} />
           </Form.Item>
           <Form.Item name="enabled" label="启用" valuePropName="checked">
             <Switch />

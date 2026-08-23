@@ -102,34 +102,58 @@ function Upload() {
     }
   }
 
-  const appChartOption = appTrend && appTrend.items.length > 0 ? {
-    tooltip: {
-      trigger: 'axis',
-      formatter: (params: any) => {
-        let html = params[0]?.axisValueLabel + '<br/>'
-        for (const p of params) {
-          html += `${p.marker} ${p.seriesName}: ${formatKB(p.value[1] / 1024)}<br/>`
-        }
-        return html
+  const COLORS = ['#5470c6','#91cc75','#fac858','#ee6666','#73c0de','#3ba272','#fc8452','#9a60b4','#ea7ccc','#48b8d0']
+  const appColorMap = new Map<string, string>()
+  if (appTrend?.items) {
+    appTrend.items.forEach((item: string, i: number) => { appColorMap.set(item, COLORS[i % COLORS.length]) })
+  }
+
+  const appChartOption = appTrend && appTrend.items.length > 0 ? (() => {
+    const allTimestamps = new Set<string>()
+    for (const item of appTrend.items) {
+      for (const p of (appTrend.series[item] || [])) {
+        allTimestamps.add(p.timestamp)
+      }
+    }
+    const sortedTs = Array.from(allTimestamps).sort()
+
+    return {
+      tooltip: {
+        trigger: 'axis',
+        formatter: (params: any) => {
+          let html = params[0]?.axisValueLabel + '<br/>'
+          for (const p of params) {
+            if (p.value[1] > 0) {
+              html += `${p.marker} ${p.seriesName}: ${formatKB(p.value[1] / 1024)}<br/>`
+            }
+          }
+          return html
+        },
       },
-    },
-    legend: { type: 'scroll', bottom: 0, textStyle: { fontSize: 11 } },
-    grid: { top: 20, bottom: 55, left: 70, right: 20 },
-    xAxis: { type: 'time' },
-    yAxis: {
-      type: 'value',
-      name: 'KB',
-      axisLabel: { formatter: (v: number) => formatKB(v / 1024) },
-    },
-    series: appTrend.items.map((item: string) => ({
-      name: item,
-      type: 'line',
-      stack: 'traffic',
-      areaStyle: {},
-      smooth: true,
-      data: (appTrend.series[item] || []).map((p: any) => [p.timestamp, p.value]),
-    })),
-  } : null
+      legend: { type: 'scroll', bottom: 0, textStyle: { fontSize: 11 } },
+      grid: { top: 20, bottom: 55, left: 70, right: 20 },
+      xAxis: { type: 'time' },
+      yAxis: {
+        type: 'value',
+        axisLabel: { formatter: (v: number) => formatKB(v / 1024) },
+      },
+      series: appTrend.items.map((item: string) => {
+        const dataMap = new Map<string, number>()
+        for (const p of (appTrend.series[item] || [])) {
+          dataMap.set(p.timestamp, p.value)
+        }
+        return {
+          name: item,
+          type: 'line',
+          stack: 'traffic',
+          areaStyle: {},
+          smooth: true,
+          itemStyle: { color: appColorMap.get(item) },
+          data: sortedTs.map(ts => [ts, dataMap.get(ts) || 0]),
+        }
+      }),
+    }
+  })() : null
 
   const threatChartOption = threatTrend && threatTrend.items.length > 0 ? {
     tooltip: { trigger: 'axis' },
@@ -152,7 +176,7 @@ function Upload() {
       type: 'pie',
       radius: ['30%', '65%'],
       center: ['50%', '45%'],
-      data: appRanking.slice(0, 10).map(item => ({ name: item.name, value: item.bytes })),
+      data: appRanking.slice(0, 10).map(item => ({ name: item.name, value: item.bytes, itemStyle: { color: appColorMap.get(item.name) } })),
       label: { show: false },
       emphasis: { label: { show: true, fontSize: 12 } },
     }],

@@ -25,6 +25,7 @@ function Dashboard() {
   const [devices, setDevices] = useState<any[]>([])
   const [selectedDevice, setSelectedDevice] = useState<string>('')
   const [metrics, setMetrics] = useState<any[]>([])
+  const [activeAlerts, setActiveAlerts] = useState<number>(0)
   const [timeRange, setTimeRange] = useState<string>('24h')
   const [cpuData, setCpuData] = useState<any>(null)
   const [pdData, setPdData] = useState<any>(null)
@@ -41,6 +42,9 @@ function Dashboard() {
     client.get('/metrics/definitions').then(res => {
       setMetrics(res.data.items)
     })
+    client.get('/alerts/active-count').then(res => {
+      setActiveAlerts(res.data.count)
+    }).catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -97,34 +101,51 @@ function Dashboard() {
     }],
   } : null
 
-  const appChartOption = appTrend && appTrend.items.length > 0 ? {
-    tooltip: {
-      trigger: 'axis',
-      formatter: (params: any) => {
-        let html = params[0]?.axisValueLabel + '<br/>'
-        for (const p of params) {
-          html += `${p.marker} ${p.seriesName}: ${formatKB(p.value[1] / 1024)}<br/>`
-        }
-        return html
+  const appChartOption = appTrend && appTrend.items.length > 0 ? (() => {
+    const allTimestamps = new Set<string>()
+    for (const item of appTrend.items) {
+      for (const p of (appTrend.series[item] || [])) {
+        allTimestamps.add(p.timestamp)
+      }
+    }
+    const sortedTs = Array.from(allTimestamps).sort()
+
+    return {
+      tooltip: {
+        trigger: 'axis',
+        formatter: (params: any) => {
+          let html = params[0]?.axisValueLabel + '<br/>'
+          for (const p of params) {
+            if (p.value[1] > 0) {
+              html += `${p.marker} ${p.seriesName}: ${formatKB(p.value[1] / 1024)}<br/>`
+            }
+          }
+          return html
+        },
       },
-    },
-    legend: { type: 'scroll', bottom: 0, textStyle: { fontSize: 10 } },
-    grid: { top: 30, bottom: 55, left: 60, right: 20 },
-    xAxis: { type: 'time', axisLabel: { fontSize: 10 } },
-    yAxis: {
-      type: 'value',
-      name: 'KB',
-      axisLabel: { formatter: (v: number) => formatKB(v / 1024) },
-    },
-    series: appTrend.items.map((item: string) => ({
-      name: item,
-      type: 'line',
-      stack: 'traffic',
-      areaStyle: {},
-      smooth: true,
-      data: (appTrend.series[item] || []).map((p: any) => [p.timestamp, p.value]),
-    })),
-  } : null
+      legend: { type: 'scroll', bottom: 0, textStyle: { fontSize: 10 } },
+      grid: { top: 30, bottom: 55, left: 60, right: 20 },
+      xAxis: { type: 'time', axisLabel: { fontSize: 10 } },
+      yAxis: {
+        type: 'value',
+        axisLabel: { formatter: (v: number) => formatKB(v / 1024) },
+      },
+      series: appTrend.items.map((item: string) => {
+        const dataMap = new Map<string, number>()
+        for (const p of (appTrend.series[item] || [])) {
+          dataMap.set(p.timestamp, p.value)
+        }
+        return {
+          name: item,
+          type: 'line',
+          stack: 'traffic',
+          areaStyle: {},
+          smooth: true,
+          data: sortedTs.map(ts => [ts, dataMap.get(ts) || 0]),
+        }
+      }),
+    }
+  })() : null
 
   const threatChartOption = threatTrend && threatTrend.items.length > 0 ? {
     tooltip: { trigger: 'axis' },
@@ -171,7 +192,7 @@ function Dashboard() {
           <Card size="small"><Statistic title="监控指标" value={metrics.filter(m => m.enabled).length} /></Card>
         </Col>
         <Col span={6}>
-          <Card size="small"><Statistic title="活跃告警" value={0} valueStyle={{ color: '#cf1322' }} /></Card>
+          <Card size="small"><Statistic title="活跃告警" value={activeAlerts} valueStyle={{ color: activeAlerts > 0 ? '#cf1322' : undefined }} /></Card>
         </Col>
       </Row>
 

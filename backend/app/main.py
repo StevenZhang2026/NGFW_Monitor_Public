@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.api import auth, devices, metrics, alerts, notifications, upload, system, users, device_groups, reports
+from app.api import auth, devices, metrics, alerts, notifications, upload, system, users, device_groups, reports, copilot
 
 
 @asynccontextmanager
@@ -49,6 +49,7 @@ app.include_router(system.router, prefix="/api/v1/system", tags=["system"])
 app.include_router(users.router, prefix="/api/v1/users", tags=["users"])
 app.include_router(device_groups.router, prefix="/api/v1/device-groups", tags=["device-groups"])
 app.include_router(reports.router, prefix="/api/v1/reports", tags=["reports"])
+app.include_router(copilot.router, prefix="/api/v1/copilot", tags=["copilot"])
 
 
 @app.get("/health")
