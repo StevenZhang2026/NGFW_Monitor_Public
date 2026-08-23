@@ -371,3 +371,94 @@ Authorization: Bearer <token>
 
 ### GET /system/collectors
 获取可用采集器插件列表。
+
+---
+
+## Reports 报表模块 (Admin/Operator)
+
+### GET /reports/templates
+获取报表模板列表。
+
+**Response:**
+```json
+{
+  "items": [
+    {
+      "id": "uuid",
+      "name": "防火墙周报",
+      "type": "weekly",
+      "schedule_cron": "0 8 * * 1",
+      "metrics": [
+        {"metric": "cpu_usage", "analysis": ["trend", "predict", "top10", "severity_breakdown"]}
+      ],
+      "recipients": ["admin@example.com"],
+      "enabled": true,
+      "builtin": true
+    }
+  ]
+}
+```
+
+### POST /reports/templates
+创建报表模板（Admin）。
+
+```json
+{
+  "name": "自定义周报",
+  "type": "custom",
+  "schedule_cron": "0 9 * * 5",
+  "metrics": [
+    {"metric": "cpu_usage", "analysis": ["trend", "predict"]},
+    {"metric": "acc_threat", "analysis": ["trend", "top10", "severity_breakdown"]}
+  ],
+  "recipients": ["leader@example.com"],
+  "enabled": true
+}
+```
+
+### PUT /reports/templates/{id}
+修改报表模板。
+
+### DELETE /reports/templates/{id}
+删除报表模板（预置模板不可删除）。
+
+### POST /reports/templates/{id}/generate
+手动触发报表生成。提交异步任务，立即返回。
+
+**Response:**
+```json
+{
+  "message": "Report generation started",
+  "task_id": "celery-task-uuid"
+}
+```
+
+### GET /reports/history
+获取历史报表列表。
+
+**Query Params:**
+- `template_id` — 按模板过滤
+- `page`, `page_size` — 分页
+
+**Response:**
+```json
+{
+  "items": [
+    {
+      "id": "uuid",
+      "template_id": "uuid",
+      "title": "防火墙周报 (2026-08-17 ~ 2026-08-23)",
+      "period_start": "2026-08-17T00:00:00Z",
+      "period_end": "2026-08-23T00:00:00Z",
+      "file_size": 253952,
+      "status": "success",
+      "sent_at": "2026-08-23T08:01:23Z",
+      "created_at": "2026-08-23T08:00:05Z"
+    }
+  ],
+  "total": 5
+}
+```
+
+### GET /reports/history/{id}/download
+下载报表 PDF 文件。返回 `application/pdf` 二进制流。

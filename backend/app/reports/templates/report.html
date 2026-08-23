@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { font-family: "SimHei", "Microsoft YaHei", sans-serif; margin: 40px; color: #333; font-size: 13px; }
+  h1 { color: #1677ff; font-size: 22px; border-bottom: 2px solid #1677ff; padding-bottom: 8px; }
+  h2 { color: #333; font-size: 16px; margin-top: 30px; border-left: 4px solid #1677ff; padding-left: 10px; }
+  .subtitle { color: #666; font-size: 14px; margin-bottom: 20px; }
+  .summary-box { background: #f6f8fa; border-radius: 8px; padding: 16px; margin: 16px 0; display: flex; gap: 40px; }
+  .summary-item { text-align: center; }
+  .summary-item .value { font-size: 24px; font-weight: bold; color: #1677ff; }
+  .summary-item .label { font-size: 12px; color: #666; }
+  .chart-container { margin: 12px 0; text-align: center; }
+  .chart-container img { max-width: 100%; }
+  .stats { margin: 8px 0; color: #555; }
+  .stats span { margin-right: 20px; }
+  .stats .up { color: #ff4d4f; }
+  .stats .down { color: #52c41a; }
+  .stats .stable { color: #666; }
+  .conclusion { background: #f0f5ff; border-left: 3px solid #1677ff; padding: 10px 14px; margin: 10px 0; font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 12px; }
+  th { background: #fafafa; border: 1px solid #e8e8e8; padding: 8px 12px; text-align: left; font-weight: bold; }
+  td { border: 1px solid #e8e8e8; padding: 6px 12px; }
+  tr:nth-child(even) { background: #fafafa; }
+  .severity-critical { color: #ff4d4f; font-weight: bold; }
+  .severity-high { color: #ff7a45; font-weight: bold; }
+  .severity-medium { color: #faad14; }
+  .severity-low { color: #1677ff; }
+  .overall-summary { background: #f6ffed; border: 1px solid #b7eb8f; border-radius: 8px; padding: 16px; margin-top: 30px; }
+  .overall-summary h3 { margin-top: 0; color: #52c41a; }
+  .footer { margin-top: 40px; text-align: center; color: #999; font-size: 11px; border-top: 1px solid #e8e8e8; padding-top: 10px; }
+  @page { size: A4; margin: 20mm; }
+</style>
+</head>
+<body>
+
+<h1>防火墙集中监控 - {{ report_title }}</h1>
+<div class="subtitle">{{ period_start }} ~ {{ period_end }}</div>
+
+<div class="summary-box">
+  <div class="summary-item"><div class="value">{{ device_count }}</div><div class="label">监控设备</div></div>
+  <div class="summary-item"><div class="value">{{ online_count }}</div><div class="label">在线设备</div></div>
+  <div class="summary-item"><div class="value">{{ alert_count }}</div><div class="label">本期告警</div></div>
+  <div class="summary-item"><div class="value">{{ threat_total }}</div><div class="label">威胁事件</div></div>
+</div>
+
+{% for section in sections %}
+<h2>{{ section.title }}</h2>
+
+{% if section.chart %}
+<div class="chart-container">
+  <img src="data:image/png;base64,{{ section.chart }}" />
+</div>
+{% endif %}
+
+{% if section.stats %}
+<div class="stats">
+  {% for stat in section.stats %}
+  <span>{{ stat.label }}: <strong>{{ stat.value }}</strong></span>
+  {% endfor %}
+  {% if section.trend_text %}
+  <span class="{% if section.trend_direction == 'up' %}up{% elif section.trend_direction == 'down' %}down{% else %}stable{% endif %}">
+    趋势: {{ section.trend_text }}
+  </span>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if section.conclusion %}
+<div class="conclusion">{{ section.conclusion }}</div>
+{% endif %}
+
+{% if section.table %}
+<table>
+  <tr>{% for col in section.table.columns %}<th>{{ col }}</th>{% endfor %}</tr>
+  {% for row in section.table.rows %}
+  <tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>
+  {% endfor %}
+</table>
+{% endif %}
+
+{% if section.sub_chart %}
+<div class="chart-container">
+  <img src="data:image/png;base64,{{ section.sub_chart }}" />
+</div>
+{% endif %}
+{% endfor %}
+
+<div class="overall-summary">
+  <h3>综合评估</h3>
+  {% for line in summary_lines %}
+  <p>{{ line }}</p>
+  {% endfor %}
+</div>
+
+<div class="footer">
+  防火墙集中监控系统 | 自动生成于 {{ generated_at }} | 如有疑问请联系网络安全团队
+</div>
+
+</body>
+</html>

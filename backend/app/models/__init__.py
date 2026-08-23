@@ -4,6 +4,7 @@ from app.models.device_group import DeviceGroup, UserGroupScope
 from app.models.metric import MetricDefinition, MetricData
 from app.models.alert import AlertRule, AlertEvent
 from app.models.notification import NotificationChannel
+from app.models.report import ReportTemplate, ReportHistory
 
 __all__ = [
     "User",
@@ -15,4 +16,6 @@ __all__ = [
     "AlertRule",
     "AlertEvent",
     "NotificationChannel",
+    "ReportTemplate",
+    "ReportHistory",
 ]

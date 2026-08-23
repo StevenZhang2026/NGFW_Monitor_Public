@@ -1,8 +1,8 @@
-# NGFW Monitor — Palo Alto 防火墙监控与分析平台
+# 防火墙集中监控系统 — Palo Alto NGFW 监控与分析平台
 
 ## 概述
 
-面向 Palo Alto NGFW（5450/5220/7050 等）的集中监控和分析系统。通过 PAN-OS XML API 和 SSH CLI 定时采集设备指标，存储至 TimescaleDB，提供 Web Dashboard 进行可视化展示、告警推送和趋势分析。
+面向 Palo Alto NGFW（PA-440/5500/7000 等）的集中监控和分析系统。通过 PAN-OS XML API 和 SSH CLI 定时采集设备指标，存储至 TimescaleDB，提供 Web Dashboard 进行可视化展示、告警推送、趋势分析和自动报表推送。
 
 ## 核心能力
 
@@ -10,6 +10,8 @@
 - **指标可扩展**：配置驱动 + 插件化采集，新指标零代码或低代码接入
 - **历史趋势**：原始精度全量存储，查询时用户自选展示粒度
 - **智能告警**：阈值告警 + 异常检测 + 趋势预测，支持飞书/邮件通知
+- **自动报表**：周报/月报 PDF 自动生成，趋势分析+容量预测，邮件推送给管理层
+- **ACC 数据分析**：应用流量 Top 10、威胁排名、严重性分布，支持 API 采集+CSV 导入
 - **可移植部署**：Docker Compose 一键启动，笔记本到服务器无缝迁移
 
 ## 技术栈
@@ -53,8 +55,9 @@ NGFW_bytedance/
 │   │   ├── collectors/             # 采集器插件
 │   │   ├── metrics/                # 指标定义与解析
 │   │   ├── alerts/                 # 告警引擎
+│   │   ├── reports/                # 报表生成（分析+图表+PDF）
 │   │   ├── auth/                   # 认证与权限
-│   │   └── tasks/                  # Celery 任务
+│   │   └── tasks/                  # Celery 任务（采集+告警+报表）
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── frontend/                       # React 前端
@@ -64,6 +67,11 @@ NGFW_bytedance/
 │   │   └── api/                    # API 调用层
 │   ├── Dockerfile
 │   └── package.json
+├── scripts/                        # 运维工具
+│   ├── install.sh                  # 安装
+│   ├── upgrade.sh                  # 升级
+│   ├── uninstall.sh                # 卸载
+│   └── status.sh                   # 状态检查
 └── docs/                           # 项目文档
     ├── architecture.md
     └── api-spec.md

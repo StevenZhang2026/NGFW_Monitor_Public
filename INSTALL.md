@@ -111,6 +111,7 @@ gunzip < backup.sql.gz | docker compose exec -T db psql -U ngfw ngfw_monitor
 | 443 (或自定义) | 入站 | Web 管理界面 |
 | 443 | 出站 → 防火墙 | PAN-OS XML API |
 | 22 | 出站 → 防火墙 | SSH 采集 |
+| 25/465/587 | 出站 → SMTP 服务器 | 报表邮件推送（可选） |
 | 443 | 出站 → 互联网 | 飞书/企业微信通知（可选） |
 
 ## 常见问题

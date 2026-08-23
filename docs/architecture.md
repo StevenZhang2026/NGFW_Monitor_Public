@@ -11,20 +11,20 @@
 ## 系统架构
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     React Frontend                            │
-│  仪表盘 | 设备管理 | 指标数据 | 告警管理 | ACC数据 | 用户管理   │
-└────────────────────────────┬────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                     React Frontend                                │
+│  仪表盘 | 设备管理 | 指标数据 | 告警管理 | ACC数据 | 报表 | 用户管理 │
+└────────────────────────────┬────────────────────────────────────┘
                              │ HTTPS (nginx SSL termination)
-┌────────────────────────────┴────────────────────────────────┐
-│                     FastAPI Backend                           │
-│  Device API | Metrics API | Alert API | Auth API | Upload    │
-│  DeviceGroup API | Users API | Scope Filter                  │
-└──────┬─────────────────────┬────────────────────┬───────────┘
+┌────────────────────────────┴────────────────────────────────────┐
+│                     FastAPI Backend                               │
+│  Device API | Metrics API | Alert API | Auth API | Upload        │
+│  DeviceGroup API | Users API | Reports API | Scope Filter        │
+└──────┬─────────────────────┬────────────────────┬───────────────┘
        │                     │                    │
 ┌──────┴──────┐  ┌───────────┴──────────┐  ┌─────┴─────────┐
 │ TimescaleDB │  │   Celery Workers     │  │    Redis       │
-│ (数据存储)   │  │   (采集+告警+预测)    │  │  (队列+缓存)   │
+│ (数据存储)   │  │ (采集+告警+报表生成)  │  │  (队列+缓存)   │
 └─────────────┘  └───────────┬──────────┘  └───────────────┘
                              │
               ┌──────────────┼──────────────┐
@@ -91,6 +91,30 @@ Celery Beat (定时触发)
 └── (扩展预留)         — Slack / 自定义 Webhook
 ```
 
+### Reports（报表模块）
+
+```
+报表生成流程：
+Celery Beat (cron 调度)
+  → generate_report_task(template_id)
+    → 查询 TimescaleDB 时间范围内指标数据
+      → analysis.py: numpy 线性回归趋势/预测/环比
+        → charts.py: matplotlib 渲染图表 → PNG base64
+          → generator.py: Jinja2 HTML 模板 + 数据
+            → weasyprint: HTML → PDF
+              → 保存文件 + 记录 report_history
+                → aiosmtplib: PDF 附件邮件发送
+```
+
+```
+报表模块组成：
+├── analysis.py        — 趋势分析（polyfit 线性回归）、容量预测、排名计算
+├── charts.py          — matplotlib 图表（趋势折线、饼图、柱状图、严重性分布）
+├── generator.py       — PDF 生成核心（组装数据+图表+模板→PDF）
+├── templates/         — Jinja2 HTML 报表模板（含模板化自然语言结论）
+└── init_builtin.py    — 预置模板初始化（周报/月报）
+```
+
 ## 数据模型概览
 
 ### 核心表
@@ -104,6 +128,8 @@ Celery Beat (定时触发)
 - `alert_rules` — 告警规则配置
 - `alert_events` — 告警事件历史
 - `notification_channels` — 通知渠道配置
+- `report_templates` — 报表模板（类型、调度 cron、指标列表、收件人）
+- `report_history` — 报表生成历史（PDF 文件路径、状态、发送时间）
 
 ### TimescaleDB 特性使用
 
@@ -163,6 +189,38 @@ ACC (Application Command Center) 数据分为两种采集方式：
 - 采集尝试全部失败 → status=offline
 - 无采集尝试（所有指标不到期）→ 不变更状态
 - 新设备添加时通过 keygen API 验证可达性
+
+## 报表系统
+
+### 预置模板
+
+| 模板 | 调度 | 覆盖范围 | 指标 |
+|------|------|----------|------|
+| 周报 | 每周一 08:00 | 过去 7 天 | CPU、会话数、应用 Top10、威胁 Top10+严重性 |
+| 月报 | 每月 1 日 08:00 | 过去 30 天 | 同上 + 内存、PD、接口吞吐 |
+
+### 分析能力
+
+- **趋势计算**: numpy polyfit 线性回归，输出斜率 (每小时/每周变化率)
+- **容量预测**: 按当前斜率外推，预测何时达到告警阈值
+- **环比**: 当前周期 vs 上一周期的变化百分比
+- **排名**: Top-N 应用/威胁，含流量、会话数、严重性分布
+
+### PDF 生成
+
+- 模板: Jinja2 HTML + CSS 排版
+- 图表: matplotlib 服务端渲染 → base64 PNG 嵌入 HTML
+- 转换: weasyprint (HTML+CSS → PDF)
+- 存储: Docker volume `reportdata` 在 worker/backend 容器间共享
+- 路径: `/app/data/reports/YYYY/MM/<type>_YYYYMMDD.pdf`
+
+### 模板化文字结论
+
+每个指标段落末尾附模板化自然语言结论（Jinja2 条件渲染），无需 LLM：
+- 趋势上升 → 预测到达阈值时间，建议关注
+- 趋势平稳 → 运行正常
+- 趋势下降 → 态势改善
+- 报表末尾汇总"综合评估"段落
 
 ## 安全考虑
 

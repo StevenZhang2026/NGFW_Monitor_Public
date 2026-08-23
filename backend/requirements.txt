@@ -33,3 +33,8 @@ lxml
 
 # Data processing (lightweight)
 numpy
+
+# Reports (PDF generation)
+jinja2
+matplotlib
+weasyprint

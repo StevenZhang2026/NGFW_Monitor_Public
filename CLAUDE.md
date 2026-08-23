@@ -44,6 +44,9 @@
 - [x] 仪表盘四宫格（CPU、Packet Descriptor、应用 Top 10、威胁 Top 10）
 - [x] 设备状态自动检测（采集失败→offline，采集成功→online）
 - [x] 用户管理（CRUD、角色分配、Scope 分组权限）
+- [x] ACC 实时采集重构（Log Query API 替代 Report API，时间戳对齐整点）
+- [x] 安装工具套件（install/upgrade/uninstall/status 脚本 + INSTALL.md）
+- [x] 报表模块（周报/月报自动生成 PDF、趋势分析+容量预测、邮件推送、Web 管理）
 - [ ] 告警体系端到端验证（触发→通知→恢复）
 - [ ] Panorama 设备发现
 - [ ] 数据保留策略自动执行
@@ -52,10 +55,11 @@
 ## 下一步
 
 1. 告警规则端到端验证（配置阈值规则 → 触发 → 收到通知 → 恢复通知）
-2. 接入更多设备（PA-5500/PA-7000 系列）验证兼容性
-3. 数据保留策略自动执行（TimescaleDB retention policy）
-4. Panorama 设备自动发现
-5. 性能调优（采集间隔精细控制、worker 并发优化）
+2. 报表邮件端到端验证（配置 SMTP → 自动发送 → 收件人收到 PDF）
+3. 接入更多设备（PA-5500/PA-7000 系列）验证兼容性
+4. 数据保留策略自动执行（TimescaleDB retention policy）
+5. Panorama 设备自动发现
+6. 性能调优（采集间隔精细控制、worker 并发优化）
 
 ## 常用命令
 
@@ -88,9 +92,12 @@ docker compose logs worker --tail 20 -f
 - `backend/app/metrics/parser.py` — 通用解析器（xpath, xpath_multi, regex, regex_multi, regex_cdata）
 - `backend/app/alerts/` — 告警引擎（threshold/anomaly/prediction）+ 通知渠道（feishu/wechat/email）
 - `backend/app/auth/` — 认证鉴权（JWT, password_policy, scope 权限过滤）
-- `backend/app/api/` — REST API 路由（devices, metrics, alerts, auth, users, device_groups, upload）
-- `backend/app/models/` — 数据模型（device, device_group, metric, alert, user）
-- `frontend/src/pages/` — 前端页面（Dashboard, Devices, Metrics, Alerts, Settings, Upload/ACC, Users）
+- `backend/app/api/` — REST API 路由（devices, metrics, alerts, auth, users, device_groups, upload, reports）
+- `backend/app/models/` — 数据模型（device, device_group, metric, alert, user, report）
+- `backend/app/reports/` — 报表生成（analysis 趋势分析, charts matplotlib 图表, generator PDF 生成, templates HTML 模板）
+- `backend/app/tasks/report.py` — 报表调度任务（生成 + 邮件发送）
+- `frontend/src/pages/` — 前端页面（Dashboard, Devices, Metrics, Alerts, Settings, Upload/ACC, Users, Reports）
+- `scripts/` — 运维工具（install.sh, upgrade.sh, uninstall.sh, status.sh）
 - `certs/` — 自签名 TLS 证书（.gitignore）
 - `docs/` — 架构文档和 API 规范
 
@@ -103,3 +110,5 @@ docker compose logs worker --tail 20 -f
 - PA-440 Report API 返回 `<report>` 根元素（非标准的 `<response>`），解析时需特殊处理
 - PA-440 有效 report 名称：top-applications, top-spyware-threats, top-viruses, top-url-categories
 - PA-440 实验室环境流量少，Report API 可能返回空结果（机制正常，只是无数据）
+- weasyprint 需要系统级依赖（libcairo2, libpango, libgdk-pixbuf, fonts-wqy-zenhei），已在 Dockerfile 中安装
+- 报表 PDF 通过 Docker volume（reportdata）在 worker 和 backend 容器间共享

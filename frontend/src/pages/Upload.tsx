@@ -62,8 +62,8 @@ function Upload() {
     let start: string, end: string
     if (timeRange === 'custom') {
       if (!customRange) return
-      start = customRange[0].startOf('day').toISOString()
-      end = customRange[1].endOf('day').toISOString()
+      start = customRange[0].toISOString()
+      end = customRange[1].toISOString()
     } else {
       end = new Date().toISOString()
       start = new Date(Date.now() - RANGE_MS[timeRange]).toISOString()
@@ -224,6 +224,8 @@ function Upload() {
           <Select style={{ width: 130 }} value={timeRange} onChange={(v) => { setTimeRange(v); if (v !== 'custom') setCustomRange(null) }} options={TIME_RANGES} />
           {timeRange === 'custom' && (
             <RangePicker
+              showTime={{ format: 'HH:mm' }}
+              format="YYYY-MM-DD HH:mm"
               value={customRange}
               onChange={(dates) => setCustomRange(dates as [dayjs.Dayjs, dayjs.Dayjs] | null)}
               allowClear={false}

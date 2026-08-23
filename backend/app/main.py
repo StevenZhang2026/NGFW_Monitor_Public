@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.api import auth, devices, metrics, alerts, notifications, upload, system, users, device_groups
+from app.api import auth, devices, metrics, alerts, notifications, upload, system, users, device_groups, reports
 
 
 @asynccontextmanager
@@ -19,6 +19,8 @@ async def lifespan(app: FastAPI):
     # Startup: init DB, create admin user, load builtin metrics
     from app.models.database import init_db
     await init_db()
+    from app.reports.init_builtin import init_builtin_reports
+    await init_builtin_reports()
     yield
     # Shutdown: cleanup
 
@@ -46,6 +48,7 @@ app.include_router(upload.router, prefix="/api/v1/upload", tags=["upload"])
 app.include_router(system.router, prefix="/api/v1/system", tags=["system"])
 app.include_router(users.router, prefix="/api/v1/users", tags=["users"])
 app.include_router(device_groups.router, prefix="/api/v1/device-groups", tags=["device-groups"])
+app.include_router(reports.router, prefix="/api/v1/reports", tags=["reports"])
 
 
 @app.get("/health")

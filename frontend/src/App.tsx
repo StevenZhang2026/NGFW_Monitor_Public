@@ -10,6 +10,7 @@ import Alerts from './pages/Alerts'
 import Upload from './pages/Upload'
 import Settings from './pages/Settings'
 import Users from './pages/Users'
+import Reports from './pages/Reports'
 
 function App() {
   return (
@@ -23,6 +24,7 @@ function App() {
           <Route path="metrics" element={<Metrics />} />
           <Route path="alerts" element={<Alerts />} />
           <Route path="upload" element={<Upload />} />
+          <Route path="reports" element={<Reports />} />
           <Route path="users" element={<Users />} />
           <Route path="settings" element={<Settings />} />
         </Route>

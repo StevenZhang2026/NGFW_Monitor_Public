@@ -26,7 +26,13 @@ celery_app.conf.update(
             "task": "tasks.evaluate_alerts",
             "schedule": 120.0,
         },
+        "check-report-schedules-hourly": {
+            "task": "tasks.check_report_schedules",
+            "schedule": 3600.0,
+        },
     },
 )
 
-celery_app.autodiscover_tasks(["app.tasks.collect", "app.tasks.alert"])
+import app.tasks.collect  # noqa: E402, F401
+import app.tasks.alert  # noqa: E402, F401
+import app.tasks.report  # noqa: E402, F401
