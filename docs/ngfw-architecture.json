@@ -8,7 +8,7 @@
     "views": [
       { "id": "collect-path", "label": "采集链路", "focus": ["firewalls", "worker", "timescaledb", "redis"], "note": "设备指标从防火墙经 Worker 采集存入 TimescaleDB" },
       { "id": "web-path", "label": "Web 访问链路", "focus": ["browser", "nginx", "fastapi", "timescaledb"], "note": "用户通过 HTTPS 访问前端，API 查询时序数据" },
-      { "id": "report-path", "label": "报表生成链路", "focus": ["beat", "worker", "timescaledb", "smtp"], "note": "定时调度生成 PDF 报表并通过邮件推送" },
+      { "id": "copilot-path", "label": "AI Copilot 链路", "focus": ["browser", "nginx", "fastapi", "llm", "timescaledb"], "note": "自然语言经 LLM 意图解析后查询数据库，结果模板格式化返回" },
       { "id": "alert-path", "label": "告警通知链路", "focus": ["worker", "timescaledb", "feishu", "smtp"], "note": "告警引擎评估规则后推送飞书/邮件通知" }
     ]
   },
@@ -17,6 +17,7 @@
     { "id": "nginx", "type": "cloud", "label": "Nginx", "sublabel": "SSL 终止 :443", "pos": [250, 250], "size": [130, 56] },
     { "id": "react", "type": "frontend", "label": "React 前端", "sublabel": "Ant Design + ECharts", "pos": [250, 110], "size": [130, 56] },
     { "id": "fastapi", "type": "backend", "label": "FastAPI", "sublabel": "REST API :8000", "pos": [470, 250], "size": [130, 56], "tag": "JWT + RBAC" },
+    { "id": "llm", "type": "external", "label": "LLM 服务", "sublabel": "DeepSeek / OpenAI", "pos": [700, 110], "size": [130, 56] },
     { "id": "timescaledb", "type": "database", "label": "TimescaleDB", "sublabel": "PostgreSQL 16 :5432", "pos": [700, 250], "size": [140, 56] },
     { "id": "redis", "type": "messagebus", "label": "Redis", "sublabel": "队列 + 缓存 :6379", "pos": [470, 390], "size": [130, 56] },
     { "id": "worker", "type": "backend", "label": "Celery Worker", "sublabel": "采集 + 告警 + 报表", "pos": [700, 390], "size": [140, 56] },
@@ -33,17 +34,18 @@
     { "id": "nginx-react", "from": "nginx", "to": "react", "label": "静态资源", "variant": "dashed", "fromSide": "top", "toSide": "bottom" },
     { "id": "nginx-api", "from": "nginx", "to": "fastapi", "label": "反向代理" },
     { "id": "api-db", "from": "fastapi", "to": "timescaledb", "label": "SQL 查询" },
+    { "id": "api-llm", "from": "fastapi", "to": "llm", "label": "意图解析", "variant": "dashed", "fromSide": "top", "toSide": "bottom" },
     { "id": "api-redis", "from": "fastapi", "to": "redis", "label": "缓存", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "labelDy": 24 },
     { "id": "beat-redis", "from": "beat", "to": "redis", "label": "调度任务", "fromSide": "top", "toSide": "bottom" },
     { "id": "worker-redis", "from": "worker", "to": "redis", "label": "消费队列", "fromSide": "left", "toSide": "right" },
-    { "id": "worker-db", "from": "worker", "to": "timescaledb", "label": "写入指标", "fromSide": "top", "toSide": "bottom", "labelDx": -30 },
+    { "id": "worker-db", "from": "worker", "to": "timescaledb", "label": "写入指标", "fromSide": "top", "toSide": "bottom" },
     { "id": "worker-fw", "from": "worker", "to": "firewalls", "label": "API / SSH 采集", "labelAt": [870, 460] },
     { "id": "worker-feishu", "from": "worker", "to": "feishu", "label": "告警通知", "variant": "dashed", "labelAt": [930, 190] },
     { "id": "worker-smtp", "from": "worker", "to": "smtp", "label": "报表邮件", "variant": "dashed", "labelAt": [930, 330] }
   ],
   "cards": [
     { "dot": "cyan", "title": "数据采集", "items": ["PAN-OS XML API + SSH CLI 双通道采集", "每设备连接复用，多频率调度", "ACC 应用/威胁整点对齐"] },
-    { "dot": "emerald", "title": "分析报表与告警", "items": ["numpy 趋势预测 + matplotlib 图表 + PDF 生成", "阈值/异常/预测三类告警规则", "飞书 + SMTP 双通道推送"] },
-    { "dot": "rose", "title": "安全与权限", "items": ["JWT + RBAC 三级权限控制", "Scope 设备分组数据隔离", "HTTPS + Nginx SSL 终止"] }
+    { "dot": "emerald", "title": "分析与智能", "items": ["AI Copilot 自然语言查询（LLM 仅解析意图）", "numpy 趋势预测 + PDF 报表生成", "阈值/异常/预测三类告警 + 通知冷却"] },
+    { "dot": "rose", "title": "安全与权限", "items": ["JWT + RBAC 三级权限控制", "Scope 设备分组数据隔离", "数据不经过云端 LLM"] }
   ]
 }

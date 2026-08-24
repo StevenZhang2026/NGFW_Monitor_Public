@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "AI Copilot 数据流",
+    "quality_profile": "showcase",
+    "viewBox": [1080, 640],
+    "views": [
+      { "id": "privacy-path", "label": "隐私边界", "focus": ["api", "llm"], "note": "仅用户问题文本发送至 LLM，防火墙数据永远不经过云端" },
+      { "id": "query-path", "label": "查询链路", "focus": ["api", "db", "formatter"], "note": "意图解析后在内部执行查询，模板格式化返回结果" }
+    ]
+  },
+  "stages": [
+    { "label": "输入" },
+    { "label": "意图解析" },
+    { "label": "数据查询" },
+    { "label": "格式化展示" }
+  ],
+  "nodes": [
+    { "id": "user", "type": "external", "label": "管理员", "sublabel": "自然语言提问", "stage": 0, "row": 0 },
+    { "id": "api", "type": "backend", "label": "Copilot API", "sublabel": "FastAPI 端点", "stage": 1, "row": 0, "tag": "路由分发" },
+    { "id": "llm", "type": "cloud", "label": "LLM 服务", "sublabel": "DeepSeek / OpenAI", "stage": 1, "row": 2, "tag": "仅解析意图" },
+    { "id": "db", "type": "database", "label": "TimescaleDB", "sublabel": "指标 + ACC 数据", "stage": 2, "row": 0, "tag": "time_bucket" },
+    { "id": "formatter", "type": "backend", "label": "模板格式化", "sublabel": "Markdown 生成", "stage": 3, "row": 0 },
+    { "id": "ui", "type": "frontend", "label": "Chat 界面", "sublabel": "react-markdown", "stage": 3, "row": 2 }
+  ],
+  "flows": [
+    { "id": "user-input", "from": "user", "to": "api", "label": "自然语言问题", "variant": "emphasis" },
+    { "id": "intent-request", "from": "api", "to": "llm", "label": "问题文本（无数据）", "variant": "security", "labelDx": -60 },
+    { "id": "intent-response", "from": "llm", "to": "api", "label": "结构化意图 JSON", "variant": "dashed", "labelDx": 60 },
+    { "id": "query-exec", "from": "api", "to": "db", "label": "SQL 查询", "variant": "emphasis" },
+    { "id": "data-result", "from": "db", "to": "formatter", "label": "查询结果集", "variant": "emphasis" },
+    { "id": "render-output", "from": "formatter", "to": "ui", "label": "Markdown 表格", "variant": "emphasis" }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "数据隐私",
+      "items": [
+        "LLM 仅接收用户问题文本，不含任何设备数据",
+        "查询执行完全在内部（FastAPI → TimescaleDB）",
+        "防火墙指标和 ACC 数据永远不经过云端"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "处理流程",
+      "items": [
+        "LLM 解析意图：NL → {action, params}",
+        "内部路由执行对应 SQL 查询",
+        "模板引擎格式化为 Markdown（无需 LLM 润色）"
+      ]
+    }
+  ]
+}
