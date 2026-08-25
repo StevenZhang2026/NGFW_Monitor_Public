@@ -191,9 +191,20 @@
   # top-spyware-threats-summary and top-spyware-download-summary return the
   # same rows, so merging them double-counts spyware.
   # Keyed by tid because distinct threats can share a display name.
+  #
+  # The unfiltered report is ranked by count and truncated at topn, so a
+  # Critical seen twice loses its slot to noise seen thousands of times. The
+  # severity-filtered passes give critical and high their own topn budget, so
+  # they can never be crowded out. `query` filters within the native time
+  # window and reports identical counts, so the passes overlap the unfiltered
+  # report rather than adding to it — see the merge rules in panos_report.py.
   parser:
     reports:
-      - top-attacks-acc
+      - name: top-attacks-acc
+      - name: top-attacks-acc
+        query: "(severity eq critical)"
+      - name: top-attacks-acc
+        query: "(severity eq high)"
     topn: 100
     key_field: "tid"
     name_field: "threatid"

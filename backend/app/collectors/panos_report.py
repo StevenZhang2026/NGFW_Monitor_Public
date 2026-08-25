@@ -109,11 +109,16 @@ class PanosReportCollector(BaseCollector):
                 start_local = start_utc + offset
                 end_local = end_utc + offset - timedelta(seconds=1)
 
+                default_topn = int(cfg.get("topn", DEFAULT_TOPN))
                 merged: dict[str, dict] = {}
-                for report_name in reports:
+                for spec in reports:
+                    if isinstance(spec, str):
+                        spec = {"name": spec}
                     entries = await self._run_report(
-                        client, url, device, report_name,
-                        start_local, end_local, int(cfg.get("topn", DEFAULT_TOPN)),
+                        client, url, device, spec["name"],
+                        start_local, end_local,
+                        int(spec.get("topn", default_topn)),
+                        spec.get("query"),
                     )
                     self._merge(merged, entries, cfg)
 
@@ -166,7 +171,7 @@ class PanosReportCollector(BaseCollector):
         return timedelta(seconds=quarters * 900)
 
     async def _run_report(self, client, url, device, report_name,
-                          start_local, end_local, topn) -> list:
+                          start_local, end_local, topn, query=None) -> list:
         params = {
             "type": "report",
             "reporttype": "dynamic",
@@ -176,6 +181,11 @@ class PanosReportCollector(BaseCollector):
             "end-time": end_local.strftime("%Y/%m/%d %H:%M:%S"),
             "key": device.api_key_decrypted,
         }
+        # A query narrows the rows *within* the native window; it cannot define
+        # the window. Verified on PA-440: the echoed window is unchanged and the
+        # per-row counts match the unfiltered report exactly.
+        if query:
+            params["query"] = query
         resp = await client.get(url, params=params)
         if resp.status_code != 200:
             msg = etree.fromstring(resp.content).findtext(".//msg") or resp.text
@@ -207,17 +217,25 @@ class PanosReportCollector(BaseCollector):
 
     @staticmethod
     def _merge(merged: dict, entries: list, cfg: dict) -> None:
-        """Fold report rows into the accumulator, keyed for uniqueness.
+        """Fold one report's rows into the accumulator, keyed for uniqueness.
 
         The key must be unique within a bucket: PA-440 returns distinct
         vulnerabilities that share a display name but differ by `tid`, and
         the storage primary key is (timestamp, device_id, metric_name).
+
+        Configured reports are *overlapping views of one dataset*, not disjoint
+        partitions — a severity-filtered pass returns a strict subset of the
+        unfiltered report, with byte-identical counts. So values are summed
+        within a single report but reconciled with `max` across reports.
+        Summing across reports would silently double every row that appears in
+        more than one pass.
         """
         name_field = cfg.get("name_field", "name")
         key_field = cfg.get("key_field", name_field)
         value_field = cfg.get("value_field", "nbytes")
         label_fields: dict = cfg.get("label_fields") or {}
 
+        this_report: dict[str, dict] = {}
         for entry in entries:
             key = (entry.findtext(key_field) or "").strip()
             name = (entry.findtext(name_field) or "").strip() or key
@@ -228,12 +246,18 @@ class PanosReportCollector(BaseCollector):
             except (TypeError, ValueError):
                 continue
 
-            slot = merged.setdefault(key, {"name": name, "value": 0.0, "labels": {}})
+            slot = this_report.setdefault(key, {"name": name, "value": 0.0, "labels": {}})
             slot["value"] += value
             for label, field in label_fields.items():
                 val = entry.findtext(field)
                 if val is not None and label not in slot["labels"]:
                     slot["labels"][label] = val.strip()
+
+        for key, slot in this_report.items():
+            target = merged.setdefault(key, {"name": slot["name"], "value": 0.0, "labels": {}})
+            target["value"] = max(target["value"], slot["value"])
+            for label, val in slot["labels"].items():
+                target["labels"].setdefault(label, val)
 
     async def test_connection(self, device) -> bool:
         try:

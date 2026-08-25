@@ -123,7 +123,9 @@ docker compose logs worker --tail 20 -f
 - 桶时间戳对齐后是幂等的，重复采集用 `ON CONFLICT DO NOTHING` 跳过；调度判断"是否该采"必须比对**桶身份**而不是经过时间（数据点时间戳永远滞后 now）
 - 空桶（无流量）不产生数据行，靠 `_bucket::<metric>` 标记行区分"采过但是空"和"没采过"，否则 beat 每分钟会把同一个空桶重复问设备 15 次
 - 设备时区从 `show clock` 推导，不能硬编码（CST 既是中国也是美国中部）
-- 威胁排名受 topn 截断 + 按次数排序，罕见的 Critical 事件可能被挤掉；**Critical 告警不能依赖这条数据链路**
+- 威胁排名按次数排序 + topn 截断，罕见但危险的事件会被高频噪声挤掉（实测 3 条 low 4184/2265/724 次挤掉了 10 条 medium，含只出现 1 次的 Malicious Windows Executable）。所以 critical / high 各跑一次 `query=(severity eq ...)` 独占 topn 配额，**保证可见**；medium 及以下仍受挤压
+- 严重性过滤 pass 返回的是总报表的**严格子集，count 逐字节相同**，所以 `_merge` 跨报表用 `max` 而不是求和（求和会把重叠行全部翻倍）；单个报表内部仍求和
+- `query` 只能在 `start-time`/`end-time` 窗口**内**过滤，不影响窗口本身（设备回显的 window 不变）
 - PA-440 实验室环境流量少，Report API 可能返回空结果（机制正常，只是无数据）
 - weasyprint 需要系统级依赖（libcairo2, libpango, libgdk-pixbuf, fonts-wqy-zenhei），已在 Dockerfile 中安装
 - 报表 PDF 通过 Docker volume（reportdata）在 worker 和 backend 容器间共享
