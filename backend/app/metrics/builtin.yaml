@@ -177,17 +177,30 @@
   command: ""
   # Device-side aggregation. interval doubles as the bucket size and is
   # floored to a multiple of 900s — the firewall's own ACC granularity.
+  #
+  # Reads the traffic-summary database (trsum), which is what the ACC
+  # Application Usage widget shows. The obvious-looking named report
+  # `top-applications-summary` reads `appstat` instead and undercounts wildly
+  # (measured on PA-440: 253 MB vs 1407 MB for one hour, 2.5 MB vs 590 MB for
+  # another) — do not go back to it.
+  #
+  # Keep `values` to bytes and sessions. Adding `packets` makes the device
+  # return success with zero rows, which is indistinguishable from an idle
+  # bucket, so a bad member here fails silently.
   parser:
     reports:
-      - top-applications-summary
+      - database: trsum
+        aggregate_by: ["app", "risk-of-app"]
+        values: ["bytes", "sessions"]
+        sortby: "bytes"
     topn: 100
-    key_field: "name"
-    name_field: "name"
+    key_field: "app"
+    name_field: "app"
     label_name: "application"
-    value_field: "nbytes"
+    value_field: "bytes"
     label_fields:
-      sessions: "nsess"
-      risk: "risk-of-name"
+      sessions: "sessions"
+      risk: "risk-of-app"
   data_type: gauge
   unit: "KB"
   interval: 900

@@ -1,19 +1,37 @@
 """
 PAN-OS dynamic report collector for ACC data (application usage, threat activity).
 
-Aggregation happens on the device, not here:
-  GET /api/?type=report&reporttype=dynamic&reportname=<name>
-          &topn=<n>&start-time=<t>&end-time=<t>&key=<key>
+Aggregation happens on the device, not here. Two request shapes:
 
-The firewall aggregates over its full log database and returns a ranked
-summary, so collection cost is independent of log volume. A PA-5450 doing
+  named report      ?type=report&reporttype=dynamic&reportname=<name>
+                      &topn=&start-time=&end-time=
+  inline custom     ?type=report&reporttype=dynamic&reportname=custom-dynamic-report
+                      &cmd=<type><trsum><aggregate-by>...</aggregate-by>
+                                  <values>...</values></trsum></type>
+                           <start-time>..</start-time><end-time>..</end-time><topn>..</topn>
+
+Either way the firewall aggregates over its own summary database and returns a
+ranked result, so collection cost is independent of log volume. A PA-5450 doing
 300k traffic logs an hour costs exactly the same as a PA-440 doing 200.
+
+Which database a report reads decides whether the numbers mean anything.
+`top-applications-summary` reads `appstat`, which is *not* what the ACC
+Application Usage widget shows: measured on PA-440, one hour of real traffic was
+253 MB in appstat and 1407 MB in `trsum`, and another hour was 2.5 MB vs 590 MB.
+So application bytes come from an inline custom report over `trsum`. Threats are
+fine on the named report — `top-attacks-acc` already reads `thsum`, byte-for-byte
+identical to an inline `thsum` report.
+
+Note the asymmetry: for `custom-dynamic-report` the URL's `start-time`/`end-time`
+are *silently ignored* — the device echoes back `1970/01/01` and returns nothing.
+The window only takes effect inside `cmd`.
 
 Windows are *aligned closed buckets* (15 min minimum, the device's own ACC
 granularity). That makes each data point idempotent — asking the device for
 [10:00, 10:15) always yields the same numbers — so re-collection is safe and
-gaps can be backfilled. Verified on PA-440 / PAN-OS 11.x: 15-minute buckets
-sum exactly to the containing hour.
+gaps can be backfilled. Verified on PA-440 / PAN-OS 11.x against trsum: four
+15-minute buckets (61.62 + 169.10 + 101.66 + 257.34 MB) sum exactly to the
+containing hour (589.72 MB).
 
 Report windows are expressed in the *device's* local time, which is derived
 from `show clock` rather than hardcoded, so the same code works wherever the
@@ -24,6 +42,7 @@ import asyncio
 import re
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
+from xml.sax.saxutils import escape
 
 import httpx
 from lxml import etree
@@ -89,14 +108,20 @@ def target_bucket(metric_def, now: datetime | None = None) -> tuple[datetime, da
 class PanosReportCollector(BaseCollector):
     name = "panos_report"
 
-    async def collect(self, device, metric_def) -> list[MetricResult]:
+    async def collect(self, device, metric_def, bucket=None) -> list[MetricResult]:
+        """Collect one bucket. Defaults to the newest closed one.
+
+        `bucket` overrides it with an explicit `(start_utc, end_utc)` — the
+        summary databases keep history, so a gap or a bucket collected against
+        the wrong database can be re-asked for after the fact.
+        """
         cfg = metric_def.parser or {}
         reports = cfg.get("reports") or []
         if not reports:
             return [MetricResult.failure(
                 device.id, metric_def.name, "parser.reports is empty")]
 
-        start_utc, end_utc = target_bucket(metric_def)
+        start_utc, end_utc = bucket or target_bucket(metric_def)
 
         try:
             url = f"https://{device.hostname}/api/"
@@ -115,10 +140,9 @@ class PanosReportCollector(BaseCollector):
                     if isinstance(spec, str):
                         spec = {"name": spec}
                     entries = await self._run_report(
-                        client, url, device, spec["name"],
+                        client, url, device, spec,
                         start_local, end_local,
                         int(spec.get("topn", default_topn)),
-                        spec.get("query"),
                     )
                     self._merge(merged, entries, cfg)
 
@@ -170,22 +194,56 @@ class PanosReportCollector(BaseCollector):
         quarters = round(delta.total_seconds() / 900)
         return timedelta(seconds=quarters * 900)
 
-    async def _run_report(self, client, url, device, report_name,
-                          start_local, end_local, topn, query=None) -> list:
-        params = {
-            "type": "report",
-            "reporttype": "dynamic",
-            "reportname": report_name,
-            "topn": str(topn),
-            "start-time": start_local.strftime("%Y/%m/%d %H:%M:%S"),
-            "end-time": end_local.strftime("%Y/%m/%d %H:%M:%S"),
-            "key": device.api_key_decrypted,
-        }
-        # A query narrows the rows *within* the native window; it cannot define
-        # the window. Verified on PA-440: the echoed window is unchanged and the
-        # per-row counts match the unfiltered report exactly.
-        if query:
-            params["query"] = query
+    @staticmethod
+    def _report_request(device, spec: dict, start_local, end_local, topn) -> tuple[dict, str]:
+        """Build the request params for one report spec, plus a label for errors.
+
+        A spec either names a predefined report or describes an inline custom one
+        by summary `database` (`trsum`, `thsum`, ...). In both shapes a `query`
+        narrows the rows *within* the native window and cannot define the window
+        — verified on PA-440: the echoed window is unchanged and the per-row
+        counts match the unfiltered report exactly.
+        """
+        start = start_local.strftime("%Y/%m/%d %H:%M:%S")
+        end = end_local.strftime("%Y/%m/%d %H:%M:%S")
+        params = {"type": "report", "reporttype": "dynamic", "key": device.api_key_decrypted}
+
+        database = spec.get("database")
+        if not database:
+            params.update({
+                "reportname": spec["name"],
+                "topn": str(topn),
+                "start-time": start,
+                "end-time": end,
+            })
+            if spec.get("query"):
+                params["query"] = spec["query"]
+            return params, spec["name"]
+
+        def members(values):
+            return "".join(f"<member>{escape(str(v))}</member>" for v in values or [])
+
+        cmd = (
+            f"<type><{database}>"
+            f"<aggregate-by>{members(spec.get('aggregate_by'))}</aggregate-by>"
+            f"<values>{members(spec.get('values'))}</values>"
+            f"</{database}></type>"
+        )
+        if spec.get("query"):
+            cmd += f"<query>{escape(spec['query'])}</query>"
+        if spec.get("sortby"):
+            cmd += f"<sortby>{escape(str(spec['sortby']))}</sortby>"
+        # Inside cmd, not on the URL: for custom-dynamic-report the device
+        # ignores the URL window, echoes back 1970/01/01, and returns no rows.
+        cmd += f"<start-time>{start}</start-time><end-time>{end}</end-time><topn>{topn}</topn>"
+
+        params.update({"reportname": "custom-dynamic-report", "cmd": cmd})
+        dims = "+".join(spec.get("aggregate_by") or [])
+        return params, f"{database}[{dims}]"
+
+    async def _run_report(self, client, url, device, spec,
+                          start_local, end_local, topn) -> list:
+        params, report_name = self._report_request(device, spec, start_local, end_local, topn)
         resp = await client.get(url, params=params)
         if resp.status_code != 200:
             msg = etree.fromstring(resp.content).findtext(".//msg") or resp.text

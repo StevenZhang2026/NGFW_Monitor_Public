@@ -127,6 +127,12 @@ docker compose logs worker --tail 20 -f
 - PA-440 Report API 返回 `<report>` 根元素（非标准的 `<response>`），解析时需特殊处理
 - ACC 采集用 `reporttype=dynamic`，**不能用 `predefined`**：predefined 报表是设备每天预生成的批次，会静默忽略 `period`，永远返回前一整天的快照
 - dynamic 报表的 `query` 参数只是 `period` 窗口内的二次过滤，**不能用来定义时间窗口**；要显式窗口必须用原生 `start-time` / `end-time`（设备本地时间，`end-time` 含端点，所以桶尾要减 1 秒）
+- **报表读哪个库决定数字对不对**：`top-applications-summary` 读 `appstat`（App-ID 扫描统计），不是 ACC 界面 Application Usage 的来源，实测同一小时 appstat 253MB vs `trsum` 1407MB，另一小时 2.5MB vs 590MB（少报百倍，但每个应用自己的字节数是对的——它是**漏应用**不是算错）。应用流量必须走 `trsum`。威胁不受影响：`top-attacks-acc` 本来就读 `thsum`，和内联 thsum 报表逐字节一致
+- 应用流量用**内联自定义动态报表**：`reportname=custom-dynamic-report` + `cmd=<type><trsum><aggregate-by>…</aggregate-by><values>…</values></trsum></type>`。`parser.reports` 支持 `database` / `aggregate_by` / `values` / `sortby` 形态，也兼容原来的命名报表形态
+- **custom-dynamic-report 会静默忽略 URL 上的 `start-time`/`end-time`**（回显 `1970/01/01 08:00:00`、返回 0 行），时间窗口必须写在 `cmd` 里面；`<period>custom</period>` 和 `<period><start>…</start></period>` 都会让报表生成失败
+- `trsum` 的 `values` 只能要 `bytes` / `sessions`，**加 `packets` 会让设备返回 success 但 0 行**——和空桶无法区分，是静默失效。`thsum` 的值字段是 `count` 不是 `threats`（写 `threats` 同样静默返回 0 行）
+- trsum 窗口会吸附到 15 分钟桶边界：`period=last-hour`（19:43:47~20:43:46）和显式 19:30~20:29 返回完全相同的数字。实测四个 15 分钟桶 61.62+169.10+101.66+257.34 = 589.72MB 正好等于整小时
+- `PanosReportCollector.collect(device, metric_def, bucket=(start_utc, end_utc))` 可以指定桶回补历史（汇总库保留历史）；补数时要连 `_bucket::<metric>` 标记一起删掉重写，否则调度会认为该桶已采过
 - dynamic 报表名和 predefined 是两套：应用用 `top-applications-summary`，威胁用 `top-attacks-acc`（已覆盖 spyware/vulnerability/virus 全部子类型）
 - 不要把 `top-spyware-threats-summary` / `top-spyware-download-summary` 与 `top-attacks-acc` 合并采集——它们返回相同行，会把 spyware 重复计数
 - 威胁必须按 `tid` 做存储键：不同 tid 会共用同一个显示名（如 3 条不同的 "HTTP SQL Injection Attempt"），按名字做键会撞主键
