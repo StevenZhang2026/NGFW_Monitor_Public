@@ -132,20 +132,25 @@ function Alerts() {
       title: '时间', dataIndex: 'triggered_at', key: 'triggered_at', width: 180,
       render: (v: string) => v ? new Date(v).toLocaleString('zh-CN') : '-',
     },
-    { title: '设备', dataIndex: 'device_id', key: 'device_id', render: (id: string) => deviceName(id) },
+    { title: '设备', dataIndex: 'device_id', key: 'device_id', width: 120, render: (id: string) => deviceName(id) },
     {
-      title: '指标', dataIndex: 'metric_name', key: 'metric_name',
+      title: '指标', dataIndex: 'metric_name', key: 'metric_name', width: 150,
       render: (name: string) => metricLabel(name),
     },
-    { title: '级别', dataIndex: 'severity', key: 'severity', render: (s: string) => <Tag color={severityColor(s)}>{severityLabel(s)}</Tag> },
+    { title: '级别', dataIndex: 'severity', key: 'severity', width: 90, render: (s: string) => <Tag color={severityColor(s)}>{severityLabel(s)}</Tag> },
     {
-      title: '状态', dataIndex: 'status', key: 'status',
+      title: '状态', dataIndex: 'status', key: 'status', width: 90,
       render: (s: string) => {
         const color = s === 'firing' ? 'red' : s === 'resolved' ? 'green' : 'default'
         return <Tag color={color}>{statusLabel(s)}</Tag>
       },
     },
-    { title: '消息', dataIndex: 'message', key: 'message', ellipsis: true },
+    // 不截断：自检告警的消息本身就是处置说明（哪些数据点丢了、该调哪个参数），
+    // 截掉后半句等于把结论截掉。窄列定宽，剩下的宽度全给消息，超长自动换行。
+    {
+      title: '消息', dataIndex: 'message', key: 'message',
+      render: (v: string) => <span style={{ whiteSpace: 'pre-wrap' }}>{v}</span>,
+    },
     {
       title: '操作', key: 'action', width: 80,
       render: (_: any, record: any) => record.status === 'firing' ? (
