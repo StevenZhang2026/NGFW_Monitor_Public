@@ -13,7 +13,8 @@ SYSTEM_PROMPT = """你是 NGFW Monitor 防火墙监控系统的 AI 助手。根�
 2. acc_trend - 应用/威胁趋势
    参数: metric_name (acc_application|acc_threat), days (天数), top_n (数量)
 3. metric_data - 设备指标数据(CPU、内存、会话数等)
-   参数: metric_name (cpu_usage|memory_usage|session_count|packet_descriptor|interface_throughput), days (天数)
+   参数: metric_name (cpu_usage|memory_usage|session_count|session_kbps|session_cps|packet_buffer|packet_descriptor|interface_throughput_in|interface_throughput_out|temperature), days (天数)
+   注意: 整机吞吐量用 session_kbps；interface_throughput_in/out 是单接口速率，只在问某个接口时用
 4. alert_events - 告警事件
    参数: severity (可选: critical|warning|info), status (可选: firing|acknowledged), days (天数)
 5. device_status - 设备状态概览

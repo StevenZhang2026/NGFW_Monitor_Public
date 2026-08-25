@@ -109,32 +109,73 @@ async def _query_acc_trend(params: dict, session: AsyncSession) -> dict:
 
 async def _query_metric_data(params: dict, session: AsyncSession, user: User) -> dict:
     from app.auth.scope import get_scoped_device_ids
+    from app.models.metric import MetricDefinition
+    from app.metrics.rate import counter_rate_config, counter_rate_source
     metric_name = params.get("metric_name", "cpu_usage")
     days = params.get("days", 7)
 
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=days)
 
+    definition = (await session.execute(
+        select(MetricDefinition).where(MetricDefinition.name == metric_name)
+    )).scalar_one_or_none()
+    is_counter, scale, lookback = counter_rate_config(definition)
+
     scoped_ids = await get_scoped_device_ids(user, session)
-    device_filter = ""
     query_params: dict = {"metric": metric_name, "start": start, "end": end}
-    if scoped_ids is not None:
-        device_filter = "AND device_id = ANY(:device_ids)"
+    if scoped_ids is None:
+        device_condition = "TRUE"
+    else:
+        device_condition = "device_id = ANY(:device_ids)"
         query_params["device_ids"] = scoped_ids
 
     granularity = 3600 if days <= 7 else 7200
-    query = text(f"""
-        SELECT time_bucket(INTERVAL '{granularity} seconds', timestamp) AS ts,
-               AVG(value) AS avg, MAX(value) AS max_val
-        FROM metric_data
-        WHERE metric_name = :metric
-          AND timestamp >= :start AND timestamp <= :end
-          {device_filter}
-        GROUP BY ts ORDER BY ts
-    """)
+
+    if is_counter:
+        # Answering with the counter itself would report total bytes since the
+        # last reboot, which is not what anyone asking about throughput means.
+        # Each interface keeps its own counter, so the rate is computed per
+        # instance and the *busiest* one is reported: summing interfaces would
+        # roughly double-count, because traffic crosses the firewall on two.
+        query_params["prefix"] = f"{metric_name}::%"
+        rate_sql = counter_rate_source(
+            device_condition,
+            "(metric_name = :metric OR metric_name LIKE :prefix)",
+            lookback,
+            scale,
+        )
+        query = text(f"""
+            SELECT ts, MAX(inst_avg) AS avg, MAX(inst_max) AS max_val
+            FROM (
+                SELECT time_bucket(INTERVAL '{granularity} seconds', timestamp) AS ts,
+                       device_id, mn,
+                       AVG(value) AS inst_avg, MAX(value) AS inst_max
+                FROM ({rate_sql}) AS rates
+                GROUP BY ts, device_id, mn
+            ) AS per_instance
+            GROUP BY ts ORDER BY ts
+        """)
+    else:
+        query = text(f"""
+            SELECT time_bucket(INTERVAL '{granularity} seconds', timestamp) AS ts,
+                   AVG(value) AS avg, MAX(value) AS max_val
+            FROM metric_data
+            WHERE metric_name = :metric
+              AND timestamp >= :start AND timestamp <= :end
+              AND {device_condition}
+            GROUP BY ts ORDER BY ts
+        """)
     result = await session.execute(query, query_params)
     rows = result.fetchall()
-    return {"points": [{"timestamp": str(r.ts), "avg": float(r.avg), "max": float(r.max_val)} for r in rows]}
+    return {
+        "points": [
+            {"timestamp": str(r.ts), "avg": float(r.avg), "max": float(r.max_val)}
+            for r in rows
+        ],
+        "unit": (definition.unit if definition else "") or "",
+        "derived": "rate" if is_counter else "raw",
+    }
 
 
 async def _query_alerts(params: dict, session: AsyncSession) -> dict:

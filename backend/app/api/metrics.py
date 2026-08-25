@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import get_session
 from app.models.metric import MetricDefinition
+from app.metrics.rate import counter_rate_config, counter_rate_source
 from app.models.user import User, UserRole
 from app.auth.security import get_current_user, require_role
 from app.auth.scope import check_device_in_scope
@@ -196,6 +197,10 @@ async def query_metric_data(
     end: datetime,
     instance: str = Query(default="", description="Instance filter for multi-instance metrics"),
     granularity: int = Query(default=0, description="Aggregation bucket in seconds. 0 = raw"),
+    raw_counter: bool = Query(
+        default=False,
+        description="Return the stored cumulative counter instead of a rate",
+    ),
     session: AsyncSession = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
@@ -206,45 +211,90 @@ async def query_metric_data(
         name_filter = metric_name
         name_condition = "(metric_name = :metric_name OR metric_name LIKE :metric_name_prefix)"
 
+    definition = (await session.execute(
+        select(MetricDefinition).where(MetricDefinition.name == metric_name)
+    )).scalar_one_or_none()
+
+    data_type = getattr(definition.data_type, "value", None) if definition else None
+    is_counter, scale, lookback = counter_rate_config(definition)
+    as_rate = is_counter and not raw_counter
+    if as_rate:
+        source = (
+            "("
+            + counter_rate_source(
+                "device_id = :device_id", name_condition, lookback, scale
+            )
+            + ") AS src"
+        )
+        select_cols = "timestamp, mn, value"
+    else:
+        source = "metric_data"
+        select_cols = "timestamp, metric_name AS mn, value"
+
+    params = {"device_id": device_id, "metric_name": name_filter, "start": start, "end": end}
+    if not instance:
+        params["metric_name_prefix"] = f"{metric_name}::%"
+
+    # The rate subquery has already applied the device/name/time filters; a
+    # plain metric_data read still needs them.
+    outer_where = (
+        "TRUE" if as_rate
+        else f"device_id = :device_id AND {name_condition}"
+             " AND timestamp >= :start AND timestamp <= :end"
+    )
+
     if granularity == 0:
         query = text(f"""
-            SELECT timestamp, metric_name as mn, value FROM metric_data
-            WHERE device_id = :device_id AND {name_condition}
-              AND timestamp >= :start AND timestamp <= :end
+            SELECT {select_cols} FROM {source}
+            WHERE {outer_where}
             ORDER BY timestamp
             LIMIT 2000
         """)
-        params = {"device_id": device_id, "metric_name": name_filter, "start": start, "end": end}
-        if not instance:
-            params["metric_name_prefix"] = f"{metric_name}::%"
-        result = await session.execute(query, params)
-        rows = result.fetchall()
-        points = [{"timestamp": str(r.timestamp), "value": r.value, "instance": r.mn.split("::")[-1] if "::" in r.mn else None} for r in rows]
+        rows = (await session.execute(query, params)).fetchall()
+        points = [
+            {
+                "timestamp": str(r.timestamp),
+                "value": r.value,
+                "instance": r.mn.split("::")[-1] if "::" in r.mn else None,
+            }
+            for r in rows
+        ]
     else:
+        # For a counter, the rate is computed per raw sample first and only then
+        # bucketed. Bucketing the cumulative values first and differencing the
+        # bucket averages would smear each reset across a whole bucket.
         query = text(f"""
             SELECT
                 time_bucket(INTERVAL '{int(granularity)} seconds', timestamp) AS ts,
-                metric_name as mn,
+                mn,
                 AVG(value) AS avg,
                 MAX(value) AS max,
                 MIN(value) AS min
-            FROM metric_data
-            WHERE device_id = :device_id AND {name_condition}
-              AND timestamp >= :start AND timestamp <= :end
+            FROM ({f"SELECT {select_cols} FROM {source} WHERE {outer_where}"}) AS pts
             GROUP BY ts, mn
             ORDER BY ts
         """)
-        params = {"device_id": device_id, "metric_name": name_filter, "start": start, "end": end}
-        if not instance:
-            params["metric_name_prefix"] = f"{metric_name}::%"
-        result = await session.execute(query, params)
-        rows = result.fetchall()
-        points = [{"timestamp": str(r.ts), "avg": r.avg, "max": r.max, "min": r.min, "instance": r.mn.split("::")[-1] if "::" in r.mn else None} for r in rows]
+        rows = (await session.execute(query, params)).fetchall()
+        points = [
+            {
+                "timestamp": str(r.ts),
+                "avg": r.avg,
+                "max": r.max,
+                "min": r.min,
+                "instance": r.mn.split("::")[-1] if "::" in r.mn else None,
+            }
+            for r in rows
+        ]
 
     return {
         "device_id": device_id,
         "metric_name": metric_name,
         "granularity": granularity,
+        "data_type": data_type,
+        # Tells the caller whether it is looking at the stored counter or a rate
+        # derived from it, so a chart can label the axis honestly.
+        "derived": "rate" if as_rate else "raw",
+        "unit": (definition.unit if definition else "") or "",
         "points": points,
     }
 

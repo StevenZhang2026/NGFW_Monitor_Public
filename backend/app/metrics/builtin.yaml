@@ -112,34 +112,44 @@
   chart_type: line
 
 - name: interface_throughput_in
-  display_name: "接口入向流量"
+  display_name: "接口入向速率"
   category: network
   collector: panos_api
   command: "<show><counter><interface>all</interface></counter></show>"
+  # Stored exactly as PAN-OS reports it — a monotonic byte counter — and turned
+  # into a rate at query time. `rate.scale` converts bytes/s into the `unit`
+  # below (×8 bits ÷1000), which is kbps so it lines up with session_kbps, the
+  # device's own throughput figure. It lives under `parser` because the schema
+  # is created with create_all and has no migration tooling for a new column.
   parser:
     type: xpath_multi
     entries_expr: ".//ifnet/ifnet/entry"
     value_expr: "ibytes/text()"
     label_expr: "name/text()"
+    rate:
+      scale: 0.008
   data_type: counter
-  unit: "bytes"
+  unit: "kbps"
   interval: 60
   interval_min: 10
   interval_max: 300
   chart_type: area
 
 - name: interface_throughput_out
-  display_name: "接口出向流量"
+  display_name: "接口出向速率"
   category: network
   collector: panos_api
   command: "<show><counter><interface>all</interface></counter></show>"
+  # See interface_throughput_in for why the counter is stored raw and scaled here.
   parser:
     type: xpath_multi
     entries_expr: ".//ifnet/ifnet/entry"
     value_expr: "obytes/text()"
     label_expr: "name/text()"
+    rate:
+      scale: 0.008
   data_type: counter
-  unit: "bytes"
+  unit: "kbps"
   interval: 60
   interval_min: 10
   interval_max: 300

@@ -72,13 +72,21 @@ def _format_metric(params: dict, result: dict, summary: str) -> str:
     min_val = min(values) if values else 0
 
     metric = params.get("metric_name", "")
-    unit = "%" if metric in ("cpu_usage", "memory_usage", "packet_descriptor") else ""
+    # The unit comes from the metric definition, not a hardcoded list — a metric
+    # added through the Web UI has one too, and a counter's unit describes the
+    # rate the query layer derived, not the stored counter.
+    unit = result.get("unit", "")
 
     lines = [f"**{summary}**\n"]
     lines.append(f"- 数据点数：{len(points)}")
     lines.append(f"- 平均值：{avg_val:.1f}{unit}")
     lines.append(f"- 最大值：{max_val:.1f}{unit}")
     lines.append(f"- 最小值：{min_val:.1f}{unit}")
+    if result.get("derived") == "rate":
+        lines.append(
+            "\n（该指标在设备上是累计计数器，以上是按相邻采样点差分得到的速率，"
+            "取各接口中最繁忙的一条。设备整机吞吐量请查 session_kbps。）"
+        )
 
     if metric == "cpu_usage" and max_val > 80:
         lines.append(f"\n⚠️ CPU 峰值达到 {max_val:.1f}%，建议关注。")

@@ -89,9 +89,20 @@ async def _load_builtin_metrics():
             )
             existing = result.scalar_one_or_none()
             if existing:
+                # Re-sync everything the admin cannot edit on a builtin metric.
+                # `interval` and `enabled` are deliberately left alone: the admin
+                # owns the collection frequency (design constraint 1), so an
+                # upgrade must never quietly reset a frequency they chose.
                 existing.command = m["command"]
                 existing.parser = m["parser"]
                 existing.collector = m["collector"]
+                existing.display_name = m["display_name"]
+                existing.category = m["category"]
+                existing.data_type = m.get("data_type", "gauge")
+                existing.unit = m.get("unit", "")
+                existing.chart_type = m.get("chart_type", "line")
+                existing.interval_min = m.get("interval_min", 10)
+                existing.interval_max = m.get("interval_max", 300)
             else:
                 metric = MetricDefinition(
                     name=m["name"],
