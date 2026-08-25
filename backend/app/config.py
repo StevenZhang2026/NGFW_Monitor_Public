@@ -20,6 +20,17 @@ class Settings(BaseSettings):
     collector_concurrency: int = 5
     collector_timeout: int = 30
 
+    # Collection task guard rails. A per-device lock stops the next beat tick
+    # from starting a second collection of a device that is still busy.
+    # Ordering matters: soft < hard < lock TTL, so the task always releases its
+    # own lock and the TTL is only a crash backstop. `expires` is shorter than
+    # the beat interval — a task still queued when its replacement is dispatched
+    # is stale, and running it would only add load.
+    collect_soft_time_limit: int = 240
+    collect_time_limit: int = 280
+    collect_lock_ttl: int = 300
+    collect_task_expires: int = 55
+
     # JWT
     jwt_secret_key: str = "change-me"
     jwt_access_token_expire_minutes: int = 60

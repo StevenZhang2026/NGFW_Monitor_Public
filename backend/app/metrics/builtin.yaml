@@ -23,7 +23,11 @@
   command: "<show><system><resources></resources></system></show>"
   parser:
     type: regex_cdata
-    pattern: "KiB Mem\\s*:\\s*(\\d+)\\s+total.*?(\\d+)\\s+used"
+    # PAN-OS 11.x reports `MiB Mem :  15725.1 total, ... 7028.8 used` — the unit
+    # scales with total RAM and the figures carry decimals, so neither `KiB` nor
+    # an integer-only pattern can be assumed. The ratio is unit-independent, so
+    # the prefix is simply left open.
+    pattern: "[KMG]iB Mem\\s*:\\s*([\\d.]+)\\s+total.*?([\\d.]+)\\s+used"
     calc: "value1 / value0 * 100"
   data_type: gauge
   unit: "%"

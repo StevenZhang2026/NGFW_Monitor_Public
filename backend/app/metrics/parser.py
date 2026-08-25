@@ -5,6 +5,52 @@ from lxml import etree
 
 from app.collectors.base import MetricResult
 
+# How a single-value parser reconciles more than one match.
+#
+# PA-440 has one dataplane, so `show session info` and `show running
+# resource-monitor` each yield exactly one figure per field. PA-5500 and PA-7000
+# report per dataplane, so the same expression matches once per DP. Quietly
+# keeping the first match would report DP0 alone — a plausible-looking number
+# that under-states the device by a factor of its DP count, with no error to
+# notice. So multiple matches are a hard failure unless the metric declares how
+# to combine them.
+#
+# `sum` for additive totals (sessions, cps, kbps), `max` for a worst-DP
+# saturation reading (packet buffer / descriptor), `first` only where the
+# duplicates are known to be redundant.
+_REDUCERS = {
+    "sum": sum,
+    "max": max,
+    "min": min,
+    "avg": lambda vs: sum(vs) / len(vs),
+    "first": lambda vs: vs[0],
+}
+
+
+def _reduce_matches(values, config, device_id, metric_name, source):
+    """Collapse several matches into one value. Returns (value, failure).
+
+    Exactly one of the two is None.
+    """
+    if len(values) == 1:
+        return values[0], None
+
+    policy = config.get("on_multiple")
+    reducer = _REDUCERS.get(policy) if policy else None
+    if reducer is None:
+        detail = (
+            f"unknown on_multiple '{policy}'" if policy
+            else "set parser.on_multiple to one of "
+                 f"{sorted(_REDUCERS)} (sum for additive totals such as sessions "
+                 "or throughput, max for saturation readings), or narrow the "
+                 "expression to a single node"
+        )
+        return None, MetricResult.failure(
+            device_id, metric_name,
+            f"{source} matched {len(values)} values {values[:6]} — {detail}",
+        )
+    return reducer(values), None
+
 
 def parse_value(xml_root: etree._Element, parser_config: dict, device_id: str, metric_name: str) -> list[MetricResult]:
     """Parse values from XML API response based on parser configuration."""
@@ -27,16 +73,23 @@ def _parse_xpath(root, config, device_id, metric_name, now) -> list[MetricResult
     if not result_node:
         return [MetricResult.failure(device_id, metric_name, f"XPath '{expr}' returned nothing")]
 
-    if isinstance(result_node, list):
-        value_str = result_node[0].text if hasattr(result_node[0], "text") else str(result_node[0])
-    else:
-        value_str = str(result_node)
+    if not isinstance(result_node, list):
+        result_node = [result_node]
 
-    value_str = re.sub(r"[^\d.\-]", "", value_str)
-    try:
-        value = float(value_str)
-    except ValueError:
-        return [MetricResult.failure(device_id, metric_name, f"Cannot parse value: {value_str}")]
+    values = []
+    for node in result_node:
+        raw = node.text if hasattr(node, "text") else str(node)
+        cleaned = re.sub(r"[^\d.\-]", "", raw or "")
+        try:
+            values.append(float(cleaned))
+        except ValueError:
+            return [MetricResult.failure(device_id, metric_name, f"Cannot parse value: {cleaned}")]
+
+    value, failure = _reduce_matches(
+        values, config, device_id, metric_name, f"XPath '{expr}'"
+    )
+    if failure:
+        return [failure]
 
     return [MetricResult(timestamp=now, device_id=device_id, metric_name=metric_name, value=value)]
 
@@ -114,15 +167,26 @@ def parse_value_text(text: str, parser_config: dict, device_id: str, metric_name
 
 def _parse_regex(text, config, device_id, metric_name, now) -> list[MetricResult]:
     pattern = config["pattern"]
-    match = re.search(pattern, text)
-    if not match:
+    # `show running resource-monitor` prints one block per dataplane, so the same
+    # pattern matches once per DP on PA-5500/PA-7000. Same reasoning as the XPath
+    # path: never silently keep only the first block.
+    matches = list(re.finditer(pattern, text))
+    if not matches:
         return [MetricResult.failure(device_id, metric_name, f"Regex '{pattern}' no match")]
 
-    value_str = match.group(1)
-    try:
-        value = float(value_str)
-    except ValueError:
-        return [MetricResult.failure(device_id, metric_name, f"Cannot parse value: {value_str}")]
+    values = []
+    for match in matches:
+        value_str = match.group(1)
+        try:
+            values.append(float(value_str))
+        except ValueError:
+            return [MetricResult.failure(device_id, metric_name, f"Cannot parse value: {value_str}")]
+
+    value, failure = _reduce_matches(
+        values, config, device_id, metric_name, f"Regex '{pattern}'"
+    )
+    if failure:
+        return [failure]
 
     return [MetricResult(timestamp=now, device_id=device_id, metric_name=metric_name, value=value)]
 
