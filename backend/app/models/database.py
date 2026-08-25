@@ -67,6 +67,49 @@ async def init_db():
 
     # Load builtin metrics if not exists
     await _load_builtin_metrics()
+    await _seed_health_alert_rule()
+
+
+async def _seed_health_alert_rule():
+    """Make sure the collection-health rule exists.
+
+    It holds no threshold of its own worth editing in the rule UI — its job is to
+    give the health check the same notification channels, cooldown, scope and
+    on/off switch every other alert rule has. Recreated when missing, so the way
+    to silence it is to disable it, not to delete it.
+    """
+    from sqlalchemy import select
+    from app.alerts.health import DEFAULT_CONDITION, HEALTH_RULE_METRIC, HEALTH_RULE_NAME
+    from app.models.alert import AlertRule, AlertType, Severity
+
+    async with async_session() as session:
+        existing = (await session.execute(
+            select(AlertRule).where(AlertRule.metric_name == HEALTH_RULE_METRIC)
+        )).scalars().first()
+
+        if existing:
+            # Fill in thresholds a later version added, keep the ones the admin
+            # has tuned. Severity, channels and enabled are never touched.
+            merged = {**DEFAULT_CONDITION, **(existing.condition or {})}
+            if merged != (existing.condition or {}):
+                existing.condition = merged
+                await session.commit()
+            return
+
+        session.add(AlertRule(
+            name=HEALTH_RULE_NAME,
+            metric_name=HEALTH_RULE_METRIC,
+            device_ids=[],
+            # A placeholder: AlertType cannot gain a member without a migration,
+            # and this rule is dispatched by metric name, not by type.
+            type=AlertType.threshold,
+            condition=dict(DEFAULT_CONDITION),
+            severity=Severity.warning,
+            notification_channel_ids=[],
+            notify_interval=30,
+            enabled=True,
+        ))
+        await session.commit()
 
 
 async def _load_builtin_metrics():

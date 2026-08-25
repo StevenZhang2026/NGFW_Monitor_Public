@@ -13,7 +13,7 @@ from app.config import settings
 from app.metrics.parser import parse_value, parse_value_text
 from app.collectors.base import MetricResult
 from app.collectors.panos_report import bucket_marker_name, target_bucket
-from app.tasks.locks import device_collect_lock
+from app.tasks.locks import device_collect_lock, record_collect_duration
 
 # Beat fires every 60s, and a metric's newest point is stamped part-way into the
 # task, so the measured gap between two consecutive ticks is always a little
@@ -56,7 +56,14 @@ def collect_device(device_id: str):
     with device_collect_lock(device_id) as acquired:
         if not acquired:
             return
-        asyncio.run(_collect_device(device_id))
+        started = time.monotonic()
+        try:
+            asyncio.run(_collect_device(device_id))
+        finally:
+            # Recorded even on failure: the time was spent either way, and
+            # app.alerts.health compares it against the interval to warn before
+            # the pipeline starts dropping cycles.
+            record_collect_duration(device_id, time.monotonic() - started)
 
 
 async def _due_metrics(session, device_id: str, metrics: list, now) -> list:

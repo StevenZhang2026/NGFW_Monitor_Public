@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   Table, Tag, Button, Tabs, Modal, Form, Input, Select, Switch,
-  InputNumber, Space, Popconfirm, message, Badge,
+  InputNumber, Space, Popconfirm, message, Badge, Tooltip, Alert,
 } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined, BellOutlined, CheckOutlined } from '@ant-design/icons'
 import client from '../api/client'
@@ -32,6 +32,22 @@ const CHANNEL_TYPES = [
   { label: '邮件', value: 'email' },
   { label: 'Webhook', value: 'webhook' },
 ]
+
+// 采集健康度告警监控的是采集链路本身，不是防火墙上的指标，所以它的
+// metric_name 不在指标定义表里，需要单独给出中文名。
+const HEALTH_RULE_METRIC = '__collection_health__'
+
+const HEALTH_METRIC_LABELS: Record<string, string> = {
+  [HEALTH_RULE_METRIC]: '采集健康度',
+  'collect.device_offline': '设备离线',
+  'collect.overrun': '采集耗时逼近周期',
+  'collect.skipped': '采集周期被跳过',
+  'collect.queue_backlog': '任务队列积压',
+  'collect.interval_unreachable': '采集间隔无法满足',
+}
+
+// 采集健康度的告警对象是整个系统时，用这个占位设备 ID（见 app.alerts.health）
+const SYSTEM_DEVICE_ID = 'system'
 
 function Alerts() {
   const [events, setEvents] = useState<any[]>([])
@@ -86,7 +102,17 @@ function Alerts() {
     }
   }
 
-  const deviceName = (id: string) => devices.find((d: any) => d.id === id)?.name || id.slice(0, 8)
+  const deviceName = (id: string) => {
+    if (id === SYSTEM_DEVICE_ID) return '系统'
+    return devices.find((d: any) => d.id === id)?.name || id.slice(0, 8)
+  }
+
+  // 指标名可能是真实指标，也可能是采集健康度的信号名（不在指标定义表里）
+  const metricLabel = (name: string) =>
+    metricDefs.find((m: any) => m.name === name)?.display_name || HEALTH_METRIC_LABELS[name] || name
+
+  const isHealthRule = (rule: any) => rule?.metric_name === HEALTH_RULE_METRIC
+  const healthEditing = isHealthRule(editingRule)
 
   // --- Alert Events ---
   const acknowledge = async (id: string) => {
@@ -109,7 +135,7 @@ function Alerts() {
     { title: '设备', dataIndex: 'device_id', key: 'device_id', render: (id: string) => deviceName(id) },
     {
       title: '指标', dataIndex: 'metric_name', key: 'metric_name',
-      render: (name: string) => metricDefs.find((m: any) => m.name === name)?.display_name || name,
+      render: (name: string) => metricLabel(name),
     },
     { title: '级别', dataIndex: 'severity', key: 'severity', render: (s: string) => <Tag color={severityColor(s)}>{severityLabel(s)}</Tag> },
     {
@@ -161,6 +187,24 @@ function Alerts() {
 
   const saveRule = async () => {
     const values = await ruleForm.validateFields()
+
+    // 采集健康度只开放通道/冷却/范围/开关；metric_name、type、condition 不随表单
+    // 重建——按阈值规则的字段拼一遍会把它的判定参数清空。
+    if (editingRule && isHealthRule(editingRule)) {
+      await client.put(`/alerts/rules/${editingRule.id}`, {
+        name: values.name,
+        device_ids: values.device_ids || [],
+        severity: values.severity,
+        notification_channel_ids: values.notification_channel_ids || [],
+        notify_interval: values.notify_interval || 30,
+        enabled: values.enabled,
+      })
+      message.success('规则已更新')
+      setRuleModalOpen(false)
+      loadData()
+      return
+    }
+
     let condition: any = {}
     if (values.type === 'threshold') {
       condition = { operator: values.operator, value: values.threshold_value, duration: values.duration }
@@ -208,15 +252,20 @@ function Alerts() {
     { title: '名称', dataIndex: 'name', key: 'name' },
     {
       title: '指标', dataIndex: 'metric_name', key: 'metric_name',
-      render: (name: string) => metricDefs.find((m: any) => m.name === name)?.display_name || name,
+      render: (name: string) => metricLabel(name),
     },
     {
       title: '类型', dataIndex: 'type', key: 'type',
-      render: (t: string) => ALERT_TYPE_OPTIONS.find(o => o.value === t)?.label || t,
+      render: (t: string, record: any) =>
+        isHealthRule(record) ? '采集链路自检' : ALERT_TYPE_OPTIONS.find(o => o.value === t)?.label || t,
     },
     {
       title: '条件', dataIndex: 'condition', key: 'condition',
       render: (cond: any, record: any) => {
+        // 采集健康度不是单一阈值规则，六个信号各有自己的判定
+        if (isHealthRule(record)) {
+          return `停采≥${cond?.stale_multiplier}周期 / 耗时>${Math.round((cond?.overrun_ratio ?? 0) * 100)}%周期 / 跳过≥${cond?.skip_threshold}次 / 队列>${cond?.backlog_floor}`
+        }
         if (record.type === 'threshold') return `${cond.operator} ${cond.value} (${cond.duration}s均值)`
         if (record.type === 'anomaly') return `Z-score > ${cond.z_threshold}`
         if (record.type === 'prediction') return `预测${cond.predict_hours}h达${cond.capacity}`
@@ -227,7 +276,15 @@ function Alerts() {
       title: '设备', dataIndex: 'device_ids', key: 'device_ids',
       render: (ids: string[]) => ids?.length ? ids.map((id: string) => deviceName(id)).join(', ') : '全部',
     },
-    { title: '级别', dataIndex: 'severity', key: 'severity', render: (s: string) => <Tag color={severityColor(s)}>{severityLabel(s)}</Tag> },
+    {
+      title: '级别', dataIndex: 'severity', key: 'severity',
+      render: (s: string, record: any) => isHealthRule(record) ? (
+        // 数据已经丢了的信号固定为「严重」，这里配的只是余量预警那一档
+        <Tooltip title="仅作用于「余量预警」类信号（耗时逼近周期、队列积压、间隔无法满足）；已经在丢数据的信号固定为严重">
+          <Tag color={severityColor(s)}>{severityLabel(s)} / 严重</Tag>
+        </Tooltip>
+      ) : <Tag color={severityColor(s)}>{severityLabel(s)}</Tag>,
+    },
     {
       title: '通知', dataIndex: 'notification_channel_ids', key: 'channels',
       render: (ids: string[]) => ids?.length ? ids.map((id: string) => channels.find((c: any) => c.id === id)?.name || id.slice(0, 6)).join(', ') : '-',
@@ -241,9 +298,12 @@ function Alerts() {
       render: (_: any, record: any) => (
         <Space>
           <Button size="small" icon={<EditOutlined />} onClick={() => openRuleModal(record)} />
-          <Popconfirm title="确定删除该规则？" onConfirm={() => deleteRule(record.id)}>
-            <Button size="small" danger icon={<DeleteOutlined />} />
-          </Popconfirm>
+          {/* 内置规则删了会在下次启动时重建，关掉开关才是真正的停用方式 */}
+          {!isHealthRule(record) && (
+            <Popconfirm title="确定删除该规则？" onConfirm={() => deleteRule(record.id)}>
+              <Button size="small" danger icon={<DeleteOutlined />} />
+            </Popconfirm>
+          )}
         </Space>
       ),
     },
@@ -514,15 +574,26 @@ function Alerts() {
         destroyOnClose
       >
         <Form form={ruleForm} layout="vertical" style={{ marginTop: 16 }}>
+          {healthEditing && (
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message="内置规则：监控采集链路本身"
+              description="判定采集是否停摆、耗时是否逼近周期、队列是否积压、指标间隔能否满足。判定参数由系统维护，这里只配置通知渠道、冷却时间、生效范围和开关。"
+            />
+          )}
           <Form.Item name="name" label="规则名称" rules={[{ required: true, message: '请输入规则名称' }]}>
             <Input placeholder="如：CPU 使用率过高告警" />
           </Form.Item>
-          <Form.Item name="metric_name" label="监控指标" rules={[{ required: true, message: '请选择指标' }]}>
-            <Select
-              placeholder="选择指标"
-              options={metricDefs.filter((m: any) => m.enabled).map((m: any) => ({ label: m.display_name, value: m.name }))}
-            />
-          </Form.Item>
+          {!healthEditing && (
+            <Form.Item name="metric_name" label="监控指标" rules={[{ required: true, message: '请选择指标' }]}>
+              <Select
+                placeholder="选择指标"
+                options={metricDefs.filter((m: any) => m.enabled).map((m: any) => ({ label: m.display_name, value: m.name }))}
+              />
+            </Form.Item>
+          )}
           <Form.Item name="device_ids" label="关联设备" tooltip="留空表示对所有设备生效">
             <Select
               mode="multiple"
@@ -531,13 +602,19 @@ function Alerts() {
               allowClear
             />
           </Form.Item>
-          <Form.Item name="type" label="告警类型" rules={[{ required: true }]}>
-            <Select options={ALERT_TYPE_OPTIONS} onChange={(v) => setAlertType(v)} />
-          </Form.Item>
+          {!healthEditing && (
+            <Form.Item name="type" label="告警类型" rules={[{ required: true }]}>
+              <Select options={ALERT_TYPE_OPTIONS} onChange={(v) => setAlertType(v)} />
+            </Form.Item>
+          )}
 
-          {renderConditionFields()}
+          {!healthEditing && renderConditionFields()}
 
-          <Form.Item name="severity" label="告警级别">
+          <Form.Item
+            name="severity"
+            label="告警级别"
+            tooltip={healthEditing ? '仅作用于余量预警类信号；已经在丢数据的信号固定为严重' : undefined}
+          >
             <Select options={SEVERITY_OPTIONS} />
           </Form.Item>
           <Form.Item name="notification_channel_ids" label="通知渠道">

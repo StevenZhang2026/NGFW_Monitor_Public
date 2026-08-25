@@ -31,6 +31,14 @@ class Settings(BaseSettings):
     collect_lock_ttl: int = 300
     collect_task_expires: int = 55
 
+    # How often collections are dispatched. This is the finest cadence the
+    # system can achieve regardless of a metric's configured interval, so the
+    # collection-health check measures a device's headroom against it.
+    collect_beat_interval: int = 60
+
+    # How often the collection pipeline checks itself for falling behind.
+    collection_health_interval: int = 120
+
     # JWT
     jwt_secret_key: str = "change-me"
     jwt_access_token_expire_minutes: int = 60

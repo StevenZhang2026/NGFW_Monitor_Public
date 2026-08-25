@@ -1,4 +1,10 @@
-"""Per-device advisory locks for collection tasks.
+"""Per-device advisory locks and the collection runtime state around them.
+
+Redis is already the broker, so it is also where the scheduler's own vital
+signs live: who is currently collecting a device, which cycles were skipped,
+how long the last collection took, and how deep the task queue is. None of it
+belongs in TimescaleDB — it is per-run bookkeeping, not measurement — but all of
+it has to be readable, because `app.alerts.health` turns it into alerts.
 
 The beat tick is fixed at 60s, but one device's collection can take longer —
 measured p90 31s / max 31.2s on a PA-440, and a device with many interfaces or
@@ -32,6 +38,10 @@ logger = logging.getLogger(__name__)
 
 _LOCK_PREFIX = "ngfw:collect:lock:"
 _SKIP_KEY = "ngfw:collect:skips"
+# Snapshot of _SKIP_KEY as of the last health check, so "skips in this window"
+# can be derived without destroying the cumulative tally.
+_SKIP_SEEN_KEY = "ngfw:collect:skips:seen"
+_DURATION_KEY = "ngfw:collect:duration"
 
 # Release only if we still own the lock. Without the token comparison, a task
 # that overran its TTL would delete the successor's lock on the way out.
@@ -127,12 +137,100 @@ def collect_skips() -> dict[str, dict]:
     return out
 
 
+def take_skip_deltas() -> dict[str, int]:
+    """Skips per device since the previous call: {device_id: n}, n > 0 only.
+
+    `collect_skips()` is cumulative so a total can be displayed; deciding
+    whether collection is falling behind *right now* needs skips per window,
+    which means advancing a snapshot. Destructive by design — only the health
+    check may call it, or two consumers would each see part of the story.
+    """
+    try:
+        current = {
+            field.rpartition(":")[0]: int(value)
+            for field, value in _redis().hgetall(_SKIP_KEY).items()
+            if field.endswith(":count")
+        }
+        seen = {field: int(value) for field, value in _redis().hgetall(_SKIP_SEEN_KEY).items()}
+    except (redis.RedisError, ValueError):
+        return {}
+
+    deltas = {d: n - seen.get(d, 0) for d, n in current.items()}
+    if current:
+        try:
+            _redis().hset(_SKIP_SEEN_KEY, mapping=current)
+        except redis.RedisError:
+            # The snapshot did not advance, so the next call reports these skips
+            # again. Repeating a warning is the safe direction to fail.
+            pass
+    return {d: n for d, n in deltas.items() if n > 0}
+
+
+def record_collect_duration(device_id: str, seconds: float) -> None:
+    """Record how long a collection took.
+
+    Recorded for failed collections too: a poll that times out still occupies a
+    worker slot and still spends the interval's budget.
+    """
+    try:
+        pipe = _redis().pipeline()
+        pipe.hset(_DURATION_KEY, f"{device_id}:last", f"{seconds:.2f}")
+        pipe.hset(_DURATION_KEY, f"{device_id}:at", int(time.time()))
+        pipe.execute()
+        # The peak needs a read before the write, which a pipeline cannot do.
+        # Two workers racing here can lose an update, but this is a displayed
+        # statistic, not a decision input — the alert reads `last`.
+        previous = _redis().hget(_DURATION_KEY, f"{device_id}:max")
+        if previous is None or seconds > float(previous):
+            _redis().hset(_DURATION_KEY, f"{device_id}:max", f"{seconds:.2f}")
+    except (redis.RedisError, ValueError):
+        pass
+
+
+def collect_durations() -> dict[str, dict]:
+    """Collection timings per device: {device_id: {"last": s, "max": s, "at": epoch}}."""
+    try:
+        raw = _redis().hgetall(_DURATION_KEY)
+    except redis.RedisError:
+        return {}
+
+    out: dict[str, dict] = {}
+    for field, value in raw.items():
+        device_id, _, kind = field.rpartition(":")
+        if not device_id:
+            continue
+        try:
+            out.setdefault(device_id, {})[kind] = int(value) if kind == "at" else float(value)
+        except ValueError:
+            continue
+    return out
+
+
+def queue_depth(queue: str = "celery") -> int | None:
+    """Tasks waiting in the broker queue, or None if it cannot be read.
+
+    Only what is still in Redis is visible. A worker reserves
+    `worker_prefetch_multiplier` tasks per slot into its own memory, so this
+    understates the true backlog — it is a supporting signal, never the only
+    evidence that collection is behind.
+    """
+    try:
+        return int(_redis().llen(queue))
+    except redis.RedisError:
+        return None
+
+
 def reset_collect_skips(device_id: str | None = None) -> None:
-    """Clear the tally — for one device, or all of them."""
+    """Clear the tally — for one device, or all of them.
+
+    The delta snapshot is cleared with it; leaving it behind would hold a
+    watermark above the reset counter and hide the next real skips.
+    """
     try:
         if device_id is None:
-            _redis().delete(_SKIP_KEY)
+            _redis().delete(_SKIP_KEY, _SKIP_SEEN_KEY)
         else:
             _redis().hdel(_SKIP_KEY, f"{device_id}:count", f"{device_id}:last")
+            _redis().hdel(_SKIP_SEEN_KEY, device_id)
     except redis.RedisError:
         pass

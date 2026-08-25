@@ -52,6 +52,10 @@
 - [x] AI Copilot 助手（自然语言查询、LLM 意图解析、模板格式化、模型可配置）
 - [x] ACC 图表修复（趋势图 tooltip 时间轴对齐、趋势图/饼图颜色统一）
 - [x] 交互式系统架构图（archify 生成）
+- [x] 采集防重入（per-device Redis 锁，跳过而非并发采同一台设备）
+- [x] 采集命令去重 + interval 真正生效（单次采集 19.9s → 9.5s）
+- [x] 计数器类指标查询期差分（interface_throughput 等按速率返回，原始累计值不改动）
+- [x] 采集链路自检告警（停采/耗时/跳周期/队列积压/间隔无法满足/设备离线，六个信号）
 - [ ] Panorama 设备发现
 - [ ] 数据保留策略自动执行
 - [ ] 多设备接入验证
@@ -64,6 +68,8 @@
 4. Panorama 设备自动发现
 5. 性能调优（采集间隔精细控制、worker 并发优化）
 6. Copilot 能力扩展（支持更多查询类型、多轮对话）
+7. `cpu_usage` 曾采到 112.3%（`%Cpu(s)` 不应超过 100），需查解析规则——影响 CPU 阈值告警和容量预测
+8. 大设备接口白名单可配置（PA-5450/7050 逻辑接口多，全采会拉长采集耗时）
 
 ## 常用命令
 
@@ -90,11 +96,16 @@ docker compose logs worker --tail 20 -f
 ## 目录结构
 
 - `backend/app/collectors/` — 采集器插件（panos_api, panos_ssh, panorama, panos_report, file_upload）
-- `backend/app/tasks/collect.py` — 核心采集调度（per-device 批量采集，连接复用，状态自动检测）
+- `backend/app/tasks/collect.py` — 核心采集调度（per-device 批量采集，命令去重，连接复用，状态自动检测）
+- `backend/app/tasks/locks.py` — 采集防重入锁 + 跳过/耗时/队列深度等运行时状态（Redis）
 - `backend/app/tasks/alert.py` — 告警评估任务
+- `backend/app/tasks/health.py` — 采集链路自检任务（每 120s，事件去重+自动恢复）
 - `backend/app/metrics/builtin.yaml` — 内置指标定义（12 个，含 ACC 应用/威胁）
 - `backend/app/metrics/parser.py` — 通用解析器（xpath, xpath_multi, regex, regex_multi, regex_cdata）
+- `backend/app/metrics/rate.py` — 计数器→速率的查询期差分 SQL
 - `backend/app/alerts/` — 告警引擎（threshold/anomaly/prediction）+ 通知渠道（feishu/wechat/email）
+- `backend/app/alerts/health.py` — 采集链路自检的信号定义（六个信号 + 判定阈值）
+- `backend/app/alerts/notify.py` — 通知冷却判定 + 渠道分发（指标告警和自检告警共用）
 - `backend/app/auth/` — 认证鉴权（JWT, password_policy, scope 权限过滤）
 - `backend/app/copilot/` — AI Copilot 模块（intent 意图解析, formatter 结果格式化）
 - `backend/app/api/` — REST API 路由（devices, metrics, alerts, auth, users, device_groups, upload, reports, copilot）
@@ -128,4 +139,12 @@ docker compose logs worker --tail 20 -f
 - `query` 只能在 `start-time`/`end-time` 窗口**内**过滤，不影响窗口本身（设备回显的 window 不变）
 - PA-440 实验室环境流量少，Report API 可能返回空结果（机制正常，只是无数据）
 - weasyprint 需要系统级依赖（libcairo2, libpango, libgdk-pixbuf, fonts-wqy-zenhei），已在 Dockerfile 中安装
+- **建库靠 `create_all`，没有 Alembic**：加新表可以，**加新列和给 postgres enum 加值不行**（`create_all` 不会 `ALTER`）。所以速率配置塞在已有的 `parser` JSON 里，采集健康度规则复用 `AlertType.threshold` + 哨兵 `metric_name`，而不是加新枚举值
+- **SQLAlchemy autoflush 陷阱**：`session.add(event)` 后在同一 session 里 `SELECT COUNT` 会把待写入的这行 flush 出去并数进结果。通知冷却曾因此把每一条真实告警都静音了（事件照样入库，就是没人收到通知）。冷却判定必须在 `session.add` **之前**做
+- 通知渠道的「测试发送」按钮验证的是渠道配置，**不等于告警链路通了**——它绕过冷却和事件写入
+- 多个指标共用一条命令（`show session info` 喂 4 个，`show system resources` 喂 2 个），采集按命令去重后再把响应分发给各指标；SSH 每条命令固定 4s settle + 最多 8s 排空，重复命令是秒级浪费
+- 计数器类指标（接口收发字节数）存原始累计值，**差分在查询期做**（`app/metrics/rate.py`，`lag()` 按 `(device_id, metric_name)` 分区）。差分为负说明设备重启或计数器回绕，该点丢弃；lookback 要越过 `:start` 否则首个样本没有前值
+- 采集健康度规则是内置的，删了下次启动会重建（`_seed_health_alert_rule`），**停用方式是关开关**。管理员改过的 `condition` 不会被升级覆盖，只会补上新版本新增的键
+- 队列深度只能看到还在 Redis 里的任务，worker 预取的部分不可见，所以 `worker_prefetch_multiplier=1`——否则积压藏在 worker 内存里，还会在里面熬过 `expires` 被丢掉
+- 跳过计数是**增量消费**的（`take_skip_deltas` 读一次就推进水位），所以「跳周期」是事件不是状态，下次自检没有新增就自动恢复；API 展示读的是累计值，不推进水位
 - 报表 PDF 通过 Docker volume（reportdata）在 worker 和 backend 容器间共享

@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models.database import get_session
 from app.models.alert import AlertRule, AlertEvent, AlertType, Severity, AlertStatus
 from app.models.user import User, UserRole
@@ -159,6 +160,59 @@ async def active_alert_count(
         query = query.where(AlertEvent.device_id.in_(scoped_ids))
     count = (await session.execute(query)).scalar_one()
     return {"count": count}
+
+
+@router.get("/collection-health")
+async def collection_health(
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_role(UserRole.admin)),
+):
+    """Raw vitals behind the 采集健康度 alerts, for diagnosing one.
+
+    Reads the cumulative skip tally rather than the per-window deltas: taking the
+    deltas advances a snapshot, and only the health check may do that.
+    """
+    from app.alerts.health import HEALTH_RULE_METRIC, _cycle_budget
+    from app.models.device import Device
+    from app.models.metric import MetricDefinition
+    from app.tasks.locks import collect_durations, collect_skips, queue_depth
+
+    rule = (await session.execute(
+        select(AlertRule).where(AlertRule.metric_name == HEALTH_RULE_METRIC)
+    )).scalars().first()
+
+    devices = (await session.execute(
+        select(Device).where(Device.collect_enabled == True)
+    )).scalars().all()
+    metrics = (await session.execute(
+        select(MetricDefinition).where(MetricDefinition.enabled == True)
+    )).scalars().all()
+
+    durations = collect_durations()
+    skips = collect_skips()
+    budget = _cycle_budget(metrics)
+
+    return {
+        "rule": {"id": rule.id, "enabled": rule.enabled, "condition": rule.condition} if rule else None,
+        "cycle_budget_seconds": budget,
+        "queue_depth": queue_depth(),
+        "device_count": len(devices),
+        "worker_concurrency": settings.collector_concurrency,
+        "devices": [
+            {
+                "device_id": d.id,
+                "name": d.name,
+                "status": d.status.value if hasattr(d.status, "value") else d.status,
+                "last_seen": d.last_seen,
+                "last_collect_seconds": (durations.get(d.id) or {}).get("last"),
+                "peak_collect_seconds": (durations.get(d.id) or {}).get("max"),
+                "last_collect_at": (durations.get(d.id) or {}).get("at"),
+                "skipped_cycles": (skips.get(d.id) or {}).get("count", 0),
+                "last_skip_at": (skips.get(d.id) or {}).get("last"),
+            }
+            for d in devices
+        ],
+    }
 
 
 class BatchAcknowledge(BaseModel):
