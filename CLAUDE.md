@@ -120,37 +120,41 @@ docker compose logs worker --tail 20 -f
 
 ## 已知注意事项
 
-- macOS Docker Desktop 需开启「Access local network」才能从容器访问 LAN 设备
-- PA-440 管理面资源有限，并发连接不能太多（当前采集已优化为单连接复用）
+只记会再次踩到的坑。能从代码直接读出来的实现细节不写在这里。
+
+### PAN-OS 报表 API（ACC 数据）
+
+- **报表读哪个库决定数字对不对**：`top-applications-summary` 读 `appstat`（App-ID 扫描统计），不是 ACC 界面 Application Usage 的来源，实测同一小时 253MB vs `trsum` 1407MB。应用流量必须走 `trsum` 的内联自定义报表（`reportname=custom-dynamic-report` + `cmd=<type><trsum>…`）；威胁走 `top-attacks-acc`，它本来就读 `thsum`，是对的
+- 必须 `reporttype=dynamic`，**不能 `predefined`**：predefined 是设备每天预生成的批次，会静默忽略 `period`，永远返回前一整天的快照
+- 三种**静默失效**（设备返回 success 但 0 行，与空桶无法区分）：`custom-dynamic-report` 忽略 URL 上的 `start-time`/`end-time`（窗口必须写进 `cmd`）；`trsum` 的 `values` 加 `packets`；`thsum` 的值字段写 `threats`（正确是 `count`）
+- `query` 只在 `start-time`/`end-time` 窗口**内**过滤，不能用来定义窗口。窗口是设备本地时间，`end-time` 含端点，所以桶尾要减 1 秒
+- 不要把 `top-spyware-threats-summary` / `top-spyware-download-summary` 与 `top-attacks-acc` 合并采集——返回相同行，会把 spyware 重复计数
+- 严重性过滤 pass 是总报表的**严格子集，count 逐字节相同**，所以 `_merge` 跨报表用 `max` 而不是求和（求和会把重叠行翻倍）；单个报表内部仍求和
+- 威胁排名按次数排序 + topn 截断，罕见但危险的事件会被高频噪声挤掉，所以 critical / high 各跑一次 `query=(severity eq …)` 独占配额保证可见；medium 及以下仍受挤压
+- 威胁按 `tid` 做存储键——不同 tid 会共用同一个显示名，按名字做键会撞主键。部分 spyware/DNS 威胁设备本身没有名字，`threatid` 直接返回数字 ID
+- 设备时区从 `show clock` 推导，不能硬编码（CST 既是中国也是美国中部）
+- v2.2 之前的 ACC 历史数据走 Log Query API，有 `nlogs` 上限，流量大的小时截断越狠（实测某小时 81MB vs 实际 681MB），跨 v2.2 切换点的环比和趋势斜率不可比
+
+### 采集调度
+
+- 桶时间戳对齐后幂等，重复采集用 `ON CONFLICT DO NOTHING`；调度判断"是否该采"必须比对**桶身份**而不是经过时间（数据点时间戳永远滞后 now）
+- 空桶不产生数据行，靠 `_bucket::<metric>` 标记区分"采过但是空"和"没采过"，否则 beat 每分钟会把同一个空桶重复问 15 次。回补历史用 `collect(…, bucket=(start, end))`，补数要连标记一起删掉重写
+- 多个指标共用一条命令（`show session info` 喂 4 个），采集按命令去重后再分发响应。SSH 每条命令固定 4s settle + 最多 8s 排空，重复命令是秒级浪费
+- 计数器类指标存原始累计值，**差分在查询期做**（`app/metrics/rate.py`）。差分为负说明设备重启或计数器回绕，该点丢弃；lookback 要越过 `:start`，否则首个样本没有前值
+- `worker_prefetch_multiplier=1`：worker 预取的任务在队列深度里看不见，积压会藏在 worker 内存里，还会在里面熬过 `expires` 被丢掉
+- 跳过计数是**增量消费**的（`take_skip_deltas` 读一次就推进水位），所以「跳周期」是事件不是状态，下次自检没有新增就自动恢复；API 展示读累计值，不推进水位
+- PA-440 管理面资源有限，并发连接不能太多（当前已优化为单连接复用）
+
+### 数据库与 ORM
+
+- **建库靠 `create_all`，没有 Alembic**：加新表可以，**加新列和给 postgres enum 加值不行**。所以速率配置塞在已有的 `parser` JSON 里，采集健康度规则复用 `AlertType.threshold` + 哨兵 `metric_name`，而不是加新枚举值
+- **SQLAlchemy autoflush 陷阱**：`session.add(x)` 后在同一 session 里 `SELECT COUNT` 会把待写入的这行 flush 出去并数进结果。通知冷却曾因此把每一条真实告警都静音了（事件照样入库，就是没人收到通知）。冷却判定必须在 `session.add` **之前**做
 - asyncpg 不支持 INTERVAL 参数绑定，SQL 中必须内联 INTERVAL 字符串
 - Celery prefork worker 不能共享 async engine，每个 task 需创建独立 engine 并 dispose
-- PA-440 Report API 返回 `<report>` 根元素（非标准的 `<response>`），解析时需特殊处理
-- ACC 采集用 `reporttype=dynamic`，**不能用 `predefined`**：predefined 报表是设备每天预生成的批次，会静默忽略 `period`，永远返回前一整天的快照
-- dynamic 报表的 `query` 参数只是 `period` 窗口内的二次过滤，**不能用来定义时间窗口**；要显式窗口必须用原生 `start-time` / `end-time`（设备本地时间，`end-time` 含端点，所以桶尾要减 1 秒）
-- **报表读哪个库决定数字对不对**：`top-applications-summary` 读 `appstat`（App-ID 扫描统计），不是 ACC 界面 Application Usage 的来源，实测同一小时 appstat 253MB vs `trsum` 1407MB，另一小时 2.5MB vs 590MB（少报百倍，但每个应用自己的字节数是对的——它是**漏应用**不是算错）。应用流量必须走 `trsum`。威胁不受影响：`top-attacks-acc` 本来就读 `thsum`，和内联 thsum 报表逐字节一致
-- 应用流量用**内联自定义动态报表**：`reportname=custom-dynamic-report` + `cmd=<type><trsum><aggregate-by>…</aggregate-by><values>…</values></trsum></type>`。`parser.reports` 支持 `database` / `aggregate_by` / `values` / `sortby` 形态，也兼容原来的命名报表形态
-- **custom-dynamic-report 会静默忽略 URL 上的 `start-time`/`end-time`**（回显 `1970/01/01 08:00:00`、返回 0 行），时间窗口必须写在 `cmd` 里面；`<period>custom</period>` 和 `<period><start>…</start></period>` 都会让报表生成失败
-- `trsum` 的 `values` 只能要 `bytes` / `sessions`，**加 `packets` 会让设备返回 success 但 0 行**——和空桶无法区分，是静默失效。`thsum` 的值字段是 `count` 不是 `threats`（写 `threats` 同样静默返回 0 行）
-- trsum 窗口会吸附到 15 分钟桶边界：`period=last-hour`（19:43:47~20:43:46）和显式 19:30~20:29 返回完全相同的数字。实测四个 15 分钟桶 61.62+169.10+101.66+257.34 = 589.72MB 正好等于整小时
-- `PanosReportCollector.collect(device, metric_def, bucket=(start_utc, end_utc))` 可以指定桶回补历史（汇总库保留历史）；补数时要连 `_bucket::<metric>` 标记一起删掉重写，否则调度会认为该桶已采过
-- dynamic 报表名和 predefined 是两套：应用用 `top-applications-summary`，威胁用 `top-attacks-acc`（已覆盖 spyware/vulnerability/virus 全部子类型）
-- 不要把 `top-spyware-threats-summary` / `top-spyware-download-summary` 与 `top-attacks-acc` 合并采集——它们返回相同行，会把 spyware 重复计数
-- 威胁必须按 `tid` 做存储键：不同 tid 会共用同一个显示名（如 3 条不同的 "HTTP SQL Injection Attempt"），按名字做键会撞主键
-- 部分 spyware/DNS-security 威胁设备本身没有名字，`threatid` 直接返回数字 ID（如 109010006），设备 ACC 界面也是这样显示
-- 桶时间戳对齐后是幂等的，重复采集用 `ON CONFLICT DO NOTHING` 跳过；调度判断"是否该采"必须比对**桶身份**而不是经过时间（数据点时间戳永远滞后 now）
-- 空桶（无流量）不产生数据行，靠 `_bucket::<metric>` 标记行区分"采过但是空"和"没采过"，否则 beat 每分钟会把同一个空桶重复问设备 15 次
-- 设备时区从 `show clock` 推导，不能硬编码（CST 既是中国也是美国中部）
-- 威胁排名按次数排序 + topn 截断，罕见但危险的事件会被高频噪声挤掉（实测 3 条 low 4184/2265/724 次挤掉了 10 条 medium，含只出现 1 次的 Malicious Windows Executable）。所以 critical / high 各跑一次 `query=(severity eq ...)` 独占 topn 配额，**保证可见**；medium 及以下仍受挤压
-- 严重性过滤 pass 返回的是总报表的**严格子集，count 逐字节相同**，所以 `_merge` 跨报表用 `max` 而不是求和（求和会把重叠行全部翻倍）；单个报表内部仍求和
-- `query` 只能在 `start-time`/`end-time` 窗口**内**过滤，不影响窗口本身（设备回显的 window 不变）
-- PA-440 实验室环境流量少，Report API 可能返回空结果（机制正常，只是无数据）
-- weasyprint 需要系统级依赖（libcairo2, libpango, libgdk-pixbuf, fonts-wqy-zenhei），已在 Dockerfile 中安装
-- **建库靠 `create_all`，没有 Alembic**：加新表可以，**加新列和给 postgres enum 加值不行**（`create_all` 不会 `ALTER`）。所以速率配置塞在已有的 `parser` JSON 里，采集健康度规则复用 `AlertType.threshold` + 哨兵 `metric_name`，而不是加新枚举值
-- **SQLAlchemy autoflush 陷阱**：`session.add(event)` 后在同一 session 里 `SELECT COUNT` 会把待写入的这行 flush 出去并数进结果。通知冷却曾因此把每一条真实告警都静音了（事件照样入库，就是没人收到通知）。冷却判定必须在 `session.add` **之前**做
+
+### 告警与部署
+
 - 通知渠道的「测试发送」按钮验证的是渠道配置，**不等于告警链路通了**——它绕过冷却和事件写入
-- 多个指标共用一条命令（`show session info` 喂 4 个，`show system resources` 喂 2 个），采集按命令去重后再把响应分发给各指标；SSH 每条命令固定 4s settle + 最多 8s 排空，重复命令是秒级浪费
-- 计数器类指标（接口收发字节数）存原始累计值，**差分在查询期做**（`app/metrics/rate.py`，`lag()` 按 `(device_id, metric_name)` 分区）。差分为负说明设备重启或计数器回绕，该点丢弃；lookback 要越过 `:start` 否则首个样本没有前值
-- 采集健康度规则是内置的，删了下次启动会重建（`_seed_health_alert_rule`），**停用方式是关开关**。管理员改过的 `condition` 不会被升级覆盖，只会补上新版本新增的键
-- 队列深度只能看到还在 Redis 里的任务，worker 预取的部分不可见，所以 `worker_prefetch_multiplier=1`——否则积压藏在 worker 内存里，还会在里面熬过 `expires` 被丢掉
-- 跳过计数是**增量消费**的（`take_skip_deltas` 读一次就推进水位），所以「跳周期」是事件不是状态，下次自检没有新增就自动恢复；API 展示读的是累计值，不推进水位
-- 报表 PDF 通过 Docker volume（reportdata）在 worker 和 backend 容器间共享
+- 采集健康度规则是内置的，删了下次启动会重建（`_seed_health_alert_rule`），**停用方式是关开关**；管理员改过的 `condition` 不会被升级覆盖
+- macOS Docker Desktop 需开启「Access local network」才能从容器访问 LAN 设备
+- weasyprint 需要系统级依赖（libcairo2, libpango, libgdk-pixbuf, fonts-wqy-zenhei），已在 Dockerfile 中安装
