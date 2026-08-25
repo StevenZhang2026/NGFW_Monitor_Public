@@ -31,3 +31,10 @@ certs/*.crt
 
 # Backups
 backups/
+
+# archify 生成的截图与容纳性检查产物（由 docs/*.html 现场重新生成）
+*.visual-check.*
+
+# PPT：一个是 PANW 公司模板（第三方素材，不进公开仓库），
+# 一个是 docs/gen_ppt.py 的生成产物
+docs/*.pptx

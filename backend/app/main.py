@@ -27,7 +27,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="NGFW Monitor API",
-    version="1.0.0",
+    version="2.2.0",
     lifespan=lifespan,
 )
 
