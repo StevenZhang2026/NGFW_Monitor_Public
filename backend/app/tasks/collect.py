@@ -5,12 +5,14 @@ from contextlib import asynccontextmanager
 import httpx
 import paramiko
 from lxml import etree
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 
 from app.tasks import celery_app
 from app.config import settings
 from app.metrics.parser import parse_value, parse_value_text
 from app.collectors.base import MetricResult
+from app.collectors.panos_report import bucket_marker_name, target_bucket
 
 
 @asynccontextmanager
@@ -34,7 +36,7 @@ def collect_device(device_id: str):
 
 async def _collect_device(device_id: str):
     from datetime import datetime, timezone
-    from sqlalchemy import select, func
+    from sqlalchemy import select
     from app.models.device import Device, DeviceStatus
     from app.models.metric import MetricDefinition, MetricData
 
@@ -56,13 +58,20 @@ async def _collect_device(device_id: str):
         report_metrics_all = [m for m in metrics if m.collector == 'panos_report']
         report_metrics = []
         for m in report_metrics_all:
-            last = (await session.execute(
-                select(func.max(MetricData.timestamp)).where(
+            # ACC data points carry the bucket's start time, which always lags
+            # now, so "has the interval elapsed since the newest point" would
+            # be permanently true. Ask whether *this bucket* is already done.
+            # The marker row answers that even for an empty bucket, which would
+            # otherwise be re-requested on every beat tick for 15 minutes.
+            bucket_start, _ = target_bucket(m)
+            already_collected = (await session.execute(
+                select(MetricData.timestamp).where(
                     MetricData.device_id == device_id,
-                    MetricData.metric_name.like(f"{m.name}::%"),
-                )
+                    MetricData.metric_name == bucket_marker_name(m.name),
+                    MetricData.timestamp == bucket_start,
+                ).limit(1)
             )).scalar()
-            if last is None or (datetime.now(timezone.utc) - last).total_seconds() >= m.interval:
+            if already_collected is None:
                 report_metrics.append(m)
 
         has_success = False
@@ -105,16 +114,24 @@ async def _collect_device(device_id: str):
         if report_metrics and device.api_key_encrypted:
             has_attempt = True
             results = await _collect_report_batch(device, report_metrics)
-            for result in results:
-                if result.success:
-                    has_success = True
-                    session.add(MetricData(
-                        timestamp=result.timestamp,
-                        device_id=result.device_id,
-                        metric_name=result.metric_name,
-                        value=result.value,
-                        labels=result.labels or None,
-                    ))
+            rows = [
+                {
+                    "timestamp": r.timestamp,
+                    "device_id": r.device_id,
+                    "metric_name": r.metric_name,
+                    "value": r.value,
+                    "labels": r.labels or None,
+                }
+                for r in results if r.success
+            ]
+            if rows:
+                has_success = True
+                # Bucket timestamps are deterministic, so a re-run can collide
+                # with an existing point. Skip duplicates instead of letting an
+                # IntegrityError roll back this device's whole batch.
+                await session.execute(
+                    pg_insert(MetricData).values(rows).on_conflict_do_nothing()
+                )
 
         if has_success:
             device.status = DeviceStatus.online

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Upload as AntUpload, Button, Select, Form, Card, Table, Tag, Tabs, Space, Row, Col, Modal, message, Result, DatePicker } from 'antd'
+import { Upload as AntUpload, Alert, Button, Select, Form, Card, Table, Tag, Tabs, Space, Row, Col, Modal, message, Result, DatePicker } from 'antd'
 import { UploadOutlined } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import dayjs from 'dayjs'
@@ -26,6 +26,15 @@ const RANGE_MS: Record<string, number> = {
   '30d': 30 * 86400000,
 }
 
+const RANKING_LIMITS = [
+  { value: 50, label: '前 50 条' },
+  { value: 100, label: '前 100 条' },
+  { value: 200, label: '前 200 条' },
+  // The firewall itself ranks and truncates to a top-N per 15-minute bucket,
+  // so "全部" means everything that was collected, not the device's full list.
+  { value: 0, label: '全部（已采集）' },
+]
+
 const SEVERITY_COLORS: Record<string, string> = {
   critical: 'red',
   high: 'orange',
@@ -41,8 +50,11 @@ function Upload() {
   const [customRange, setCustomRange] = useState<[dayjs.Dayjs, dayjs.Dayjs] | null>(null)
   const [appTrend, setAppTrend] = useState<any>(null)
   const [threatTrend, setThreatTrend] = useState<any>(null)
+  const [rankingLimit, setRankingLimit] = useState<number>(200)
   const [appRanking, setAppRanking] = useState<any[]>([])
   const [threatRanking, setThreatRanking] = useState<any[]>([])
+  const [appTruncated, setAppTruncated] = useState(false)
+  const [threatTruncated, setThreatTruncated] = useState(false)
   const [uploadModalOpen, setUploadModalOpen] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [uploadResult, setUploadResult] = useState<any>(null)
@@ -76,12 +88,14 @@ function Upload() {
     client.get('/metrics/acc-trend', { params: { ...params, metric_name: 'acc_threat', top_n: 10 } })
       .then(res => setThreatTrend(res.data)).catch(() => setThreatTrend(null))
 
-    client.get('/metrics/acc-ranking', { params: { ...params, metric_name: 'acc_application', limit: 50 } })
-      .then(res => setAppRanking(res.data.items)).catch(() => setAppRanking([]))
+    client.get('/metrics/acc-ranking', { params: { ...params, metric_name: 'acc_application', limit: rankingLimit } })
+      .then(res => { setAppRanking(res.data.items); setAppTruncated(res.data.truncated) })
+      .catch(() => { setAppRanking([]); setAppTruncated(false) })
 
-    client.get('/metrics/acc-ranking', { params: { ...params, metric_name: 'acc_threat', limit: 50 } })
-      .then(res => setThreatRanking(res.data.items)).catch(() => setThreatRanking([]))
-  }, [selectedDevice, timeRange, customRange])
+    client.get('/metrics/acc-ranking', { params: { ...params, metric_name: 'acc_threat', limit: rankingLimit } })
+      .then(res => { setThreatRanking(res.data.items); setThreatTruncated(res.data.truncated) })
+      .catch(() => { setThreatRanking([]); setThreatTruncated(false) })
+  }, [selectedDevice, timeRange, customRange, rankingLimit])
 
   const handleUpload = async (values: any) => {
     const formData = new FormData()
@@ -246,6 +260,7 @@ function Upload() {
             placeholder="选择设备"
           />
           <Select style={{ width: 130 }} value={timeRange} onChange={(v) => { setTimeRange(v); if (v !== 'custom') setCustomRange(null) }} options={TIME_RANGES} />
+          <Select style={{ width: 120 }} value={rankingLimit} onChange={setRankingLimit} options={RANKING_LIMITS} />
           {timeRange === 'custom' && (
             <RangePicker
               showTime={{ format: 'HH:mm' }}
@@ -286,6 +301,14 @@ function Upload() {
                   </Col>
                 </Row>
                 <Card title="应用流量完整排名" size="small">
+                  {appTruncated && (
+                    <Alert
+                      type="info"
+                      showIcon
+                      style={{ marginBottom: 12 }}
+                      message={`当前仅显示流量最高的 ${rankingLimit} 个应用，实际数量可能更多。切换右上角「${RANKING_LIMITS.find(l => l.value === 0)!.label}」查看完整列表。`}
+                    />
+                  )}
                   <Table
                     dataSource={appRanking}
                     columns={appColumns}
@@ -319,6 +342,14 @@ function Upload() {
                   </Col>
                 </Row>
                 <Card title="威胁完整排名" size="small">
+                  {threatTruncated && (
+                    <Alert
+                      type="info"
+                      showIcon
+                      style={{ marginBottom: 12 }}
+                      message={`当前仅显示次数最高的 ${rankingLimit} 个威胁，实际数量可能更多。切换右上角「${RANKING_LIMITS.find(l => l.value === 0)!.label}」查看完整列表。`}
+                    />
+                  )}
                   <Table
                     dataSource={threatRanking}
                     columns={threatColumns}

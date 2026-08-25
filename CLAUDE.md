@@ -45,6 +45,7 @@
 - [x] 设备状态自动检测（采集失败→offline，采集成功→online）
 - [x] 用户管理（CRUD、角色分配、Scope 分组权限）
 - [x] ACC 实时采集重构（Log Query API 替代 Report API，时间戳对齐整点）
+- [x] ACC 采集改为设备侧聚合（dynamic report + 15 分钟对齐桶，采集成本与日志量无关）
 - [x] 安装工具套件（install/upgrade/uninstall/status 脚本 + INSTALL.md）
 - [x] 报表模块（周报/月报自动生成 PDF、趋势分析+容量预测、邮件推送、Web 管理）
 - [x] 告警体系优化（通知冷却、活跃告警计数、批量确认、飞书通知已验证）
@@ -113,7 +114,16 @@ docker compose logs worker --tail 20 -f
 - asyncpg 不支持 INTERVAL 参数绑定，SQL 中必须内联 INTERVAL 字符串
 - Celery prefork worker 不能共享 async engine，每个 task 需创建独立 engine 并 dispose
 - PA-440 Report API 返回 `<report>` 根元素（非标准的 `<response>`），解析时需特殊处理
-- PA-440 有效 report 名称：top-applications, top-spyware-threats, top-viruses, top-url-categories
+- ACC 采集用 `reporttype=dynamic`，**不能用 `predefined`**：predefined 报表是设备每天预生成的批次，会静默忽略 `period`，永远返回前一整天的快照
+- dynamic 报表的 `query` 参数只是 `period` 窗口内的二次过滤，**不能用来定义时间窗口**；要显式窗口必须用原生 `start-time` / `end-time`（设备本地时间，`end-time` 含端点，所以桶尾要减 1 秒）
+- dynamic 报表名和 predefined 是两套：应用用 `top-applications-summary`，威胁用 `top-attacks-acc`（已覆盖 spyware/vulnerability/virus 全部子类型）
+- 不要把 `top-spyware-threats-summary` / `top-spyware-download-summary` 与 `top-attacks-acc` 合并采集——它们返回相同行，会把 spyware 重复计数
+- 威胁必须按 `tid` 做存储键：不同 tid 会共用同一个显示名（如 3 条不同的 "HTTP SQL Injection Attempt"），按名字做键会撞主键
+- 部分 spyware/DNS-security 威胁设备本身没有名字，`threatid` 直接返回数字 ID（如 109010006），设备 ACC 界面也是这样显示
+- 桶时间戳对齐后是幂等的，重复采集用 `ON CONFLICT DO NOTHING` 跳过；调度判断"是否该采"必须比对**桶身份**而不是经过时间（数据点时间戳永远滞后 now）
+- 空桶（无流量）不产生数据行，靠 `_bucket::<metric>` 标记行区分"采过但是空"和"没采过"，否则 beat 每分钟会把同一个空桶重复问设备 15 次
+- 设备时区从 `show clock` 推导，不能硬编码（CST 既是中国也是美国中部）
+- 威胁排名受 topn 截断 + 按次数排序，罕见的 Critical 事件可能被挤掉；**Critical 告警不能依赖这条数据链路**
 - PA-440 实验室环境流量少，Report API 可能返回空结果（机制正常，只是无数据）
 - weasyprint 需要系统级依赖（libcairo2, libpango, libgdk-pixbuf, fonts-wqy-zenhei），已在 Dockerfile 中安装
 - 报表 PDF 通过 Docker volume（reportdata）在 worker 和 backend 容器间共享

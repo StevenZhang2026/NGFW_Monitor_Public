@@ -161,12 +161,22 @@
   category: acc
   collector: panos_report
   command: ""
+  # Device-side aggregation. interval doubles as the bucket size and is
+  # floored to a multiple of 900s — the firewall's own ACC granularity.
   parser:
-    log_type: "traffic"
-    lookback_seconds: 3600
+    reports:
+      - top-applications-summary
+    topn: 100
+    key_field: "name"
+    name_field: "name"
+    label_name: "application"
+    value_field: "nbytes"
+    label_fields:
+      sessions: "nsess"
+      risk: "risk-of-name"
   data_type: gauge
   unit: "KB"
-  interval: 3600
+  interval: 900
   interval_min: 900
   interval_max: 86400
   chart_type: area
@@ -176,12 +186,25 @@
   category: acc
   collector: panos_report
   command: ""
+  # top-attacks-acc already spans every threat subtype (spyware, vulnerability,
+  # virus) in one report. Do not add the per-subtype reports alongside it:
+  # top-spyware-threats-summary and top-spyware-download-summary return the
+  # same rows, so merging them double-counts spyware.
+  # Keyed by tid because distinct threats can share a display name.
   parser:
-    log_type: "threat"
-    lookback_seconds: 3600
+    reports:
+      - top-attacks-acc
+    topn: 100
+    key_field: "tid"
+    name_field: "threatid"
+    label_name: "threat_name"
+    value_field: "count"
+    label_fields:
+      severity: "severity-of-threatid"
+      category: "subtype"
   data_type: gauge
   unit: "count"
-  interval: 3600
+  interval: 900
   interval_min: 900
   interval_max: 86400
   chart_type: line

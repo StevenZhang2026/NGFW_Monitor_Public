@@ -13,6 +13,22 @@ from app.auth.scope import check_device_in_scope
 
 router = APIRouter()
 
+# Threat severity ranked by danger, worst first.
+SEVERITY_RANK = ["critical", "high", "medium", "low", "informational"]
+
+# Collapsing several threat IDs onto one display name must report the worst
+# severity among them. Aggregating the raw string instead would sort
+# alphabetically (critical < high < informational < low < medium) and
+# systematically under-report critical findings. Unrecognised values fall back
+# to the raw string rather than vanishing.
+SEVERITY_AGG = (
+    "COALESCE((ARRAY["
+    + ",".join(f"'{s}'" for s in SEVERITY_RANK)
+    + "])[MIN(CASE labels->>'severity' "
+    + " ".join(f"WHEN '{s}' THEN {i + 1}" for i, s in enumerate(SEVERITY_RANK))
+    + f" ELSE {len(SEVERITY_RANK) + 1} END)], MIN(labels->>'severity'))"
+)
+
 
 class MetricDefinitionCreate(BaseModel):
     name: str
@@ -343,7 +359,7 @@ async def query_acc_ranking(
     start: datetime = Query(default=None),
     end: datetime = Query(default=None),
     device_id: str = Query(default=""),
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: int = Query(default=200, ge=0, le=1000, description="0 = no limit"),
     session: AsyncSession = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
@@ -362,16 +378,22 @@ async def query_acc_ranking(
         start = end - timedelta(days=7)
 
     device_filter = "AND device_id = :device_id" if device_id else ""
-    params: dict = {"metric_prefix": f"{metric_name}::%", "start": start, "end": end, "limit_n": limit}
+    params: dict = {"metric_prefix": f"{metric_name}::%", "start": start, "end": end}
     if device_id:
         params["device_id"] = device_id
+
+    # limit=0 means return the full ranking
+    limit_clause = ""
+    if limit > 0:
+        limit_clause = "LIMIT :limit_n"
+        params["limit_n"] = limit
 
     if metric_name == "acc_application":
         query = text(f"""
             SELECT
                 labels->>'application' AS name,
                 SUM(value) AS bytes,
-                MAX((labels->>'sessions')::bigint) AS sessions,
+                SUM((labels->>'sessions')::bigint) AS sessions,
                 MAX(labels->>'risk') AS risk
             FROM metric_data
             WHERE metric_name LIKE :metric_prefix
@@ -380,14 +402,14 @@ async def query_acc_ranking(
               AND labels->>'application' IS NOT NULL
             GROUP BY name
             ORDER BY bytes DESC
-            LIMIT :limit_n
+            {limit_clause}
         """)
     else:
         query = text(f"""
             SELECT
                 labels->>'threat_name' AS name,
                 SUM(value) AS count,
-                MAX(labels->>'severity') AS severity,
+                {SEVERITY_AGG} AS severity,
                 MAX(labels->>'category') AS category
             FROM metric_data
             WHERE metric_name LIKE :metric_prefix
@@ -396,7 +418,7 @@ async def query_acc_ranking(
               AND labels->>'threat_name' IS NOT NULL
             GROUP BY name
             ORDER BY count DESC
-            LIMIT :limit_n
+            {limit_clause}
         """)
 
     result = await session.execute(query, params)
@@ -413,7 +435,12 @@ async def query_acc_ranking(
             for r in rows
         ]
 
-    return {"metric_name": metric_name, "items": items}
+    return {
+        "metric_name": metric_name,
+        "items": items,
+        "limit": limit,
+        "truncated": limit > 0 and len(items) >= limit,
+    }
 
 
 def _def_to_dict(m: MetricDefinition) -> dict:
