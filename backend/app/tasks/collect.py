@@ -12,7 +12,7 @@ from app.tasks import celery_app
 from app.config import settings
 from app.metrics.parser import parse_value, parse_value_text
 from app.collectors.base import MetricResult
-from app.collectors.panos_report import bucket_marker_name, target_bucket
+from app.collectors.panos_report import bucket_marker_name, bucket_seconds, target_bucket
 from app.tasks.locks import device_collect_lock, record_collect_duration
 
 # Beat fires every 60s, and a metric's newest point is stamped part-way into the
@@ -26,6 +26,20 @@ SCHEDULE_TOLERANCE = 30
 # window counts as due anyway, so the window only has to comfortably exceed the
 # longest configured interval.
 MIN_DUE_WINDOW = 3600
+
+# An offline device is probed with one cheap request per cycle instead of being
+# polled metric by metric: every poll against an unreachable device is a
+# guaranteed failure that still pays its full connect timeout, and an SSH batch
+# alone burns 30s of the interval before failing.
+PROBE_TIMEOUT = 8
+
+# ACC buckets are idempotent and the firewall keeps its summary databases, so a
+# bucket missed while the device was unreachable can still be asked for
+# afterwards. Bounded on both ends: at most this many buckets per metric per
+# cycle so catching up never eats the collection interval, and nothing older
+# than the horizon is chased at all.
+REPORT_BUCKETS_PER_CYCLE = 3
+REPORT_BACKFILL_HORIZON_HOURS = 24
 
 
 @asynccontextmanager
@@ -111,6 +125,111 @@ async def _due_metrics(session, device_id: str, metrics: list, now) -> list:
     return due
 
 
+async def _probe_reachable(device) -> bool:
+    """One cheap request deciding whether an offline device is answering again.
+
+    Deliberately not a collection: while a device is down the point is to spend
+    a single short timeout per cycle instead of one per metric, and to produce
+    no metric failures at all — an unreachable device's data does not exist and
+    retrying it per metric only turns one problem into one alert per metric.
+    """
+    if device.api_key_encrypted:
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=PROBE_TIMEOUT) as client:
+                resp = await client.get(f"https://{device.hostname}/api/", params={
+                    "type": "op",
+                    "cmd": "<show><clock/></show>",
+                    "key": device.api_key_decrypted,
+                })
+            return (
+                resp.status_code == 200
+                and etree.fromstring(resp.content).get("status") == "success"
+            )
+        except Exception:
+            return False
+    if device.ssh_username:
+        return await asyncio.to_thread(_ssh_probe, device)
+    return False
+
+
+def _ssh_probe(device) -> bool:
+    """Connect and authenticate only — no shell, no command, no 4s settle."""
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        client.connect(
+            hostname=device.hostname,
+            username=device.ssh_username,
+            password=device.ssh_password_decrypted,
+            timeout=PROBE_TIMEOUT,
+            look_for_keys=False,
+            allow_agent=False,
+        )
+        return True
+    except Exception:
+        return False
+    finally:
+        client.close()
+
+
+async def _pending_report_buckets(session, device_id: str, metric) -> list[tuple]:
+    """Buckets still owed for one ACC metric, as [(metric, (start, end))].
+
+    Always the newest closed bucket, plus any gap behind it — a device that was
+    offline, or whose cycle was skipped, left buckets unasked, and unlike a
+    polled metric those can still be recovered because the aggregation lives on
+    the device.
+
+    The marker row is the record of "this bucket was asked for", including when
+    the answer was empty. Two bounds keep catch-up from turning into a stampede:
+    only buckets after the oldest marker inside the horizon are considered, so a
+    metric with no history does not try to reconstruct time it was never
+    monitoring, and only a few buckets are taken per cycle. The newest bucket is
+    taken first so a long catch-up does not leave the dashboard stale while it
+    works through the backlog.
+    """
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import select
+    from app.models.metric import MetricData
+
+    size = bucket_seconds(metric)
+    latest_start, latest_end = target_bucket(metric)
+    horizon = latest_start - timedelta(hours=REPORT_BACKFILL_HORIZON_HOURS)
+
+    rows = (await session.execute(
+        select(MetricData.timestamp).where(
+            MetricData.device_id == device_id,
+            MetricData.metric_name == bucket_marker_name(metric.name),
+            MetricData.timestamp >= horizon,
+        )
+    )).scalars().all()
+    collected = {
+        (t if t.tzinfo else t.replace(tzinfo=timezone.utc)) for t in rows
+    }
+
+    if not collected:
+        # Never collected, or last collected before the horizon. Either way
+        # there is no gap worth reconstructing — start from the current bucket.
+        return [(metric, (latest_start, latest_end))]
+
+    pending = []
+    if latest_start not in collected:
+        pending.append(latest_start)
+
+    # Walked on the bucket grid rather than from the marker itself: a marker
+    # written before the admin changed the interval sits off the current grid,
+    # and stepping from it would ask for windows whose markers can never match a
+    # candidate — the same buckets would then be re-collected every cycle.
+    oldest = int(min(collected).timestamp())
+    start = datetime.fromtimestamp((oldest // size) * size + size, tz=timezone.utc)
+    while start < latest_start and len(pending) < REPORT_BUCKETS_PER_CYCLE:
+        if start not in collected:
+            pending.append(start)
+        start += timedelta(seconds=size)
+
+    return [(metric, (b, b + timedelta(seconds=size))) for b in pending]
+
+
 def _group_by_command(metrics: list) -> list[tuple[str, list]]:
     """Collapse metrics onto the distinct commands that feed them.
 
@@ -140,6 +259,22 @@ async def _collect_device(device_id: str):
         if not device:
             return
 
+        if device.status == DeviceStatus.offline:
+            # Collection is paused, not retried. A device that is down produces
+            # a failure for every metric on every cycle, none of which is
+            # recoverable, and each of those becomes its own alert. One probe
+            # per cycle is enough to notice it came back; the cycle it answers,
+            # collection resumes below and the ACC backfill picks up the buckets
+            # missed in the meantime.
+            if not await _probe_reachable(device):
+                return
+            device.status = DeviceStatus.online
+            device.last_seen = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            # Committed before collecting: the recovery is a fact on its own,
+            # and it must survive this cycle's collection failing for any
+            # unrelated reason.
+            await session.commit()
+
         metrics = (await session.execute(
             select(MetricDefinition).where(MetricDefinition.enabled == True)
         )).scalars().all()
@@ -151,24 +286,16 @@ async def _collect_device(device_id: str):
         due = await _due_metrics(session, device_id, polled, now)
         api_metrics = [m for m in due if m.collector == 'panos_api']
         ssh_metrics = [m for m in due if m.collector == 'panos_ssh']
-        report_metrics_all = [m for m in metrics if m.collector == 'panos_report']
-        report_metrics = []
-        for m in report_metrics_all:
-            # ACC data points carry the bucket's start time, which always lags
-            # now, so "has the interval elapsed since the newest point" would
-            # be permanently true. Ask whether *this bucket* is already done.
-            # The marker row answers that even for an empty bucket, which would
-            # otherwise be re-requested on every beat tick for 15 minutes.
-            bucket_start, _ = target_bucket(m)
-            already_collected = (await session.execute(
-                select(MetricData.timestamp).where(
-                    MetricData.device_id == device_id,
-                    MetricData.metric_name == bucket_marker_name(m.name),
-                    MetricData.timestamp == bucket_start,
-                ).limit(1)
-            )).scalar()
-            if already_collected is None:
-                report_metrics.append(m)
+        # ACC data points carry the bucket's start time, which always lags now,
+        # so "has the interval elapsed since the newest point" would be
+        # permanently true. Ask which *buckets* are still owed instead — the
+        # marker row answers that even for an empty bucket, which would
+        # otherwise be re-requested on every beat tick for 15 minutes.
+        report_jobs = []
+        for m in metrics:
+            if m.collector != 'panos_report':
+                continue
+            report_jobs += await _pending_report_buckets(session, device_id, m)
 
         has_success = False
         has_attempt = False
@@ -207,9 +334,9 @@ async def _collect_device(device_id: str):
                         labels=result.labels or None,
                     ))
 
-        if report_metrics and device.api_key_encrypted:
+        if report_jobs and device.api_key_encrypted:
             has_attempt = True
-            results = await _collect_report_batch(device, report_metrics)
+            results = await _collect_report_batch(device, report_jobs)
             rows = [
                 {
                     "timestamp": r.timestamp,
@@ -288,16 +415,20 @@ async def _collect_api_batch(device, commands) -> list[MetricResult]:
     return results
 
 
-async def _collect_report_batch(device, metrics) -> list[MetricResult]:
-    """Collect Report API metrics (ACC data) using a single HTTPS connection."""
+async def _collect_report_batch(device, jobs) -> list[MetricResult]:
+    """Collect Report API metrics (ACC data).
+
+    `jobs` is [(metric_def, (bucket_start, bucket_end))] — the same metric can
+    appear more than once when a gap is being backfilled.
+    """
     from app.collectors.registry import collector_registry
     collector = collector_registry.get("panos_report")
     if not collector:
-        return [MetricResult.failure(device.id, m.name, "panos_report collector not found") for m in metrics]
+        return [MetricResult.failure(device.id, m.name, "panos_report collector not found") for m, _ in jobs]
     results = []
-    for metric_def in metrics:
+    for metric_def, bucket in jobs:
         try:
-            batch = await collector.collect(device, metric_def)
+            batch = await collector.collect(device, metric_def, bucket=bucket)
             results.extend(batch)
         except Exception as e:
             results.append(MetricResult.failure(device.id, metric_def.name, str(e)))

@@ -22,7 +22,8 @@ The signals, ordered from earliest warning to hardest failure:
   collect.skipped               a cycle was skipped because the previous one was
                                 still running; that cycle's data does not exist
   <metric name>                 a specific metric has stopped producing points
-  collect.device_offline        every collector failed against the device
+  collect.device_offline        every collector failed against the device, so
+                                collection is paused until a probe answers again
 
 The first three are warnings — capacity is shrinking. The last three are
 critical — data is already missing. That split is derived rather than
@@ -153,9 +154,10 @@ def _offline_findings(devices) -> list[Finding]:
             metric_name=SIGNAL_DEVICE_OFFLINE,
             severity=Severity.critical,
             message=(
-                f"设备 {device.name}（{device.hostname}）采集全部失败，已标记离线。"
+                f"设备 {device.name}（{device.hostname}）采集全部失败，已标记离线，"
+                "采集已暂停（每个采集周期只做一次可达性探测，设备恢复响应后自动继续）。"
                 f"最近一次成功采集：{device.last_seen or '无记录'}。"
-                "该设备当前所有指标都在丢数据。"
+                "离线期间所有实时指标都在丢数据，ACC 流量/威胁在恢复后会自动回补。"
             ),
             value="offline",
         ))
@@ -171,9 +173,18 @@ async def _stale_findings(session, devices, metrics, condition) -> list[Finding]
     a standalone PA-440. Those are configuration facts visible where the metric
     is configured, not collection falling behind, and alerting on them would
     make the signal permanent noise.
+
+    Offline devices are excluded for the same reason: the device being down is
+    one problem with one cause, and `collect.device_offline` already reports it.
+    Listing every metric on it separately turns a single outage into a dozen
+    critical events that all say the same thing and all resolve together — and
+    since collection is paused while a device is offline, they would keep
+    growing more alarming for as long as the outage lasts.
     """
     from sqlalchemy import text
+    from app.models.device import DeviceStatus
 
+    devices = [d for d in devices if d.status != DeviceStatus.offline]
     if not devices or not metrics:
         return []
 
