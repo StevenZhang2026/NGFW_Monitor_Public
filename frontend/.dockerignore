@@ -1,0 +1,7 @@
+# 不要把宿主机的 node_modules 塞进 build context：
+# 它有 255MB，而且 COPY . . 会把它合并覆盖到 build 阶段刚装好的那份上，
+# 原生二进制（esbuild / rollup）架构对不上时 npm run build 直接失败。
+node_modules/
+dist/
+
+.DS_Store

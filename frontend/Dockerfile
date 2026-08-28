@@ -1,8 +1,12 @@
 FROM node:20-alpine AS build
 
 WORKDIR /app
-COPY package.json ./
-RUN npm install
+# 带上 package-lock.json 并用 npm ci：只 COPY package.json 的话 npm install 会
+# 重新解析版本，lockfile 要到下面 COPY . . 才进来，那时已经装完了 —— 等于每次
+# 构建的依赖版本都可能不同。npm ci 严格按 lockfile 装，lock 与 package.json
+# 不一致时直接报错而不是悄悄放行。
+COPY package.json package-lock.json ./
+RUN npm ci
 COPY . .
 RUN npm run build
 
