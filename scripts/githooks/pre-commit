@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# 只扫暂存区，凭据在进 commit 之前就被挡住。
+set -uo pipefail
+
+. "$(git rev-parse --show-toplevel)/scripts/githooks/lib.sh"
+
+if ! run_gitleaks git --staged /src; then
+    echo "" >&2
+    echo "[gitleaks] 暂存区里有凭据，提交已阻止。" >&2
+    echo "  改掉真值后重新 git add；确认是误报再用 git commit --no-verify" >&2
+    exit 1
+fi

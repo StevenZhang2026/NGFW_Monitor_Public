@@ -66,7 +66,7 @@ cd frontend && npm install && npm run dev
 # 查看采集日志
 docker compose logs worker --tail 20 -f
 
-# 装凭据门禁（clone 后跑一次，hook 不进版本控制）
+# 装凭据门禁（clone 后跑一次；hook 本体在 scripts/githooks/，只有 hooksPath 是本机配置）
 bash scripts/install-git-hooks.sh
 
 # 发布前安全关卡（确定性，只报相对 security/*.json baseline 的新增）

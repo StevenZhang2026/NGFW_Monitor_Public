@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# 扫所有还没推到任何 remote 的 commit。
+#
+# 用 --not --remotes 而不是全量历史：仓库历史里已经有过泄露（见 CHANGELOG/安全基线
+# 记录），全量扫会永远红着，门禁就形同虚设。
+set -uo pipefail
+
+. "$(git rev-parse --show-toplevel)/scripts/githooks/lib.sh"
+
+if ! run_gitleaks git /src --log-opts="--all --not --remotes"; then
+    echo "" >&2
+    echo "[gitleaks] 待推送的 commit 里有凭据，push 已阻止。" >&2
+    echo "  这些 commit 还没上远端，现在还能改历史：" >&2
+    echo "    git rebase -i <base>   或   git reset --soft <base> 后重新提交" >&2
+    echo "  已经推上去的凭据只能靠轮换，删文件没用。" >&2
+    exit 1
+fi
