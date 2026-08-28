@@ -1,0 +1,12 @@
+# trivy 忽略清单 —— 供 scripts/security-gate.sh 使用。
+#
+# 现在是空的，这是刻意的：关卡把阈值定在 HIGH,CRITICAL，加上跳过 certs/
+# （本地自签名证书目录，已在 .gitignore 里，从不进仓库也不进发布），
+# 当前 HIGH/CRITICAL 就是零，不需要任何条目。
+#
+# 什么时候往这里加：某条 HIGH/CRITICAL 经人工判定为误报或不可达，
+# 且判定理由写清楚了。**不要**用它来藏"真的但暂时不修"的问题 ——
+# 那种要记进 docs/roadmap.md，否则 baseline 一压就永远没人再看见。
+#
+# 格式：一行一个 ID，# 起头是注释。例如
+#   CVE-2024-12345  # 只在 dev server 生效，生产走 nginx 静态文件

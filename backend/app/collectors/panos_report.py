@@ -42,7 +42,9 @@ import asyncio
 import re
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
-from xml.sax.saxutils import escape
+# nosemgrep 抑制 use-defused-xml：这里导入的是**转义器**（拼 cmd 里的 XML 文本），
+# 不是解析器；解析走下面的 lxml.etree。defusedxml 没有对应的替代品。
+from xml.sax.saxutils import escape  # nosemgrep: python.lang.security.use-defused-xml.use-defused-xml
 
 import httpx
 from lxml import etree
