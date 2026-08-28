@@ -130,6 +130,35 @@ gunzip < backup.sql.gz | docker compose exec -T db psql -U ngfw ngfw_monitor
 - `docker system prune` 清理无用镜像/日志
 
 **Q: 如何修改 Web 端口？**
-- 编辑 `.env` 中的 `WEB_PORT`
-- 编辑 `docker-compose.yml` 中 frontend 的 ports 映射
+- 编辑 `docker-compose.yml` 中 frontend 的 ports 映射（容器内固定是 `8443`/`8080`，
+  nginx 以非 root 运行绑不了特权端口，只改宿主侧的映射）
 - `docker compose up -d frontend`
+
+**Q: 飞书/企业微信通知报 `CERTIFICATE_VERIFY_FAILED`？AI 助手连不上模型服务？**
+
+出网请求（飞书、企业微信、AI 模型服务）会校验 TLS 证书 —— 这些请求的 header 里带
+API Key / webhook token，不校验等于把凭据交给任意中间人。**正常部署下这里不需要任何配置**：
+对方用的是公共 CA 签发的证书，容器自带的信任库直接就能校验通过。
+
+只有一种情况会报这个错：**开发机连着 GlobalProtect**，流量走进了有 TLS 解密代理的内网，
+证书链被企业根 CA 重签。两个办法：
+
+- 断开 GP，问题自动消失（推荐，也最接近生产的实际链路）
+- 需要保持 GP 连接的话，把企业根 CA 挂进容器并指过去：
+
+```bash
+security find-certificate -a -p /Library/Keychains/System.keychain > certs/corp-root-ca.pem
+```
+```yaml
+# docker-compose.yml 的 backend 和 worker 两个服务都要加
+    volumes:
+      - ./certs/corp-root-ca.pem:/etc/ssl/corp-ca.pem:ro
+```
+```bash
+# .env
+OUTBOUND_CA_BUNDLE=/etc/ssl/corp-ca.pem
+```
+
+`OUTBOUND_TLS_VERIFY=false` 可以整体关掉校验，但那会让 API Key 重新暴露在中间人面前，
+只作为临时排障手段，不要带进生产。设备侧采集（PAN-OS API / SSH）不受这两个开关影响
+—— 防火墙用的是自签名证书，那条链路本来就不校验。

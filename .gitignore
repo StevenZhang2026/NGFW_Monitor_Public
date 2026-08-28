@@ -41,3 +41,6 @@ docs/*.pptx
 
 # 开发对话导出：里面有 curl 里的明文密码、API Key、JWT，不进版本控制
 docs/vibecoding-log.md
+
+# 安全遗留项清单：逐条写明利用路径的未修问题清单不进公开镜像
+security/private-findings.md
