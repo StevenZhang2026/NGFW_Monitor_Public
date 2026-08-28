@@ -67,8 +67,24 @@ function Alerts() {
 
   const [alertType, setAlertType] = useState<string>('threshold')
 
+  // 告警事件是服务端分页：一次只取当前页，总数由接口给出。之前整表交给
+  // Table 前端分页，页数被单次请求的条数（默认 50）截死，看起来只有 3 页。
+  const [eventPage, setEventPage] = useState(1)
+  const [eventPageSize, setEventPageSize] = useState(20)
+  const [eventTotal, setEventTotal] = useState(0)
+  const [firingCount, setFiringCount] = useState(0)
+
+  const loadEvents = () => {
+    client.get('/alerts/events', { params: { page: eventPage, page_size: eventPageSize } })
+      .then(res => {
+        setEvents(res.data.items)
+        setEventTotal(res.data.total ?? res.data.items.length)
+      })
+    // 「全部确认」作用于全部活跃告警而不只是当前页，所以按钮状态取全局活跃数
+    client.get('/alerts/active-count').then(res => setFiringCount(res.data.count))
+  }
+
   const loadData = () => {
-    client.get('/alerts/events').then(res => setEvents(res.data.items))
     client.get('/alerts/rules').then(res => setRules(res.data.items))
     client.get('/notifications/channels').then(res => setChannels(res.data.items))
     client.get('/devices').then(res => setDevices(res.data.items))
@@ -76,6 +92,7 @@ function Alerts() {
   }
 
   useEffect(() => { loadData() }, [])
+  useEffect(() => { loadEvents() }, [eventPage, eventPageSize])
 
   const severityColor = (s: string) => {
     switch (s) {
@@ -118,13 +135,13 @@ function Alerts() {
   const acknowledge = async (id: string) => {
     await client.post(`/alerts/events/${id}/acknowledge`)
     message.success('已确认')
-    loadData()
+    loadEvents()
   }
 
   const batchAcknowledge = async () => {
     const res = await client.post('/alerts/events/batch-acknowledge', {})
     message.success(`已批量确认 ${res.data.acknowledged} 条告警`)
-    loadData()
+    loadEvents()
   }
 
   const eventColumns = [
@@ -525,8 +542,8 @@ function Alerts() {
             <>
               <div style={{ marginBottom: 16 }}>
                 <Popconfirm title="确认全部活跃告警？" onConfirm={batchAcknowledge}>
-                  <Button icon={<CheckOutlined />} disabled={!events.some(e => e.status === 'firing')}>
-                    全部确认
+                  <Button icon={<CheckOutlined />} disabled={firingCount === 0}>
+                    全部确认{firingCount > 0 ? ` (${firingCount})` : ''}
                   </Button>
                 </Popconfirm>
               </div>
@@ -534,7 +551,18 @@ function Alerts() {
                 columns={eventColumns}
                 dataSource={events}
                 rowKey="id"
-                pagination={{ pageSize: 20 }}
+                pagination={{
+                  current: eventPage,
+                  pageSize: eventPageSize,
+                  total: eventTotal,
+                  showSizeChanger: true,
+                  pageSizeOptions: ['20', '50', '100', '200'],
+                  showTotal: (total) => `共 ${total} 条`,
+                  onChange: (page, size) => {
+                    setEventPage(page)
+                    setEventPageSize(size)
+                  },
+                }}
               />
             </>
           ),

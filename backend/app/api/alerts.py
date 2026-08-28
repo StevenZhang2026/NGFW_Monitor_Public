@@ -130,23 +130,40 @@ async def list_events(
     session: AsyncSession = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    query = select(AlertEvent).order_by(AlertEvent.triggered_at.desc())
-
+    filters = []
     scoped_ids = await get_scoped_device_ids(user, session)
     if scoped_ids is not None:
-        query = query.where(AlertEvent.device_id.in_(scoped_ids))
+        filters.append(AlertEvent.device_id.in_(scoped_ids))
 
     if severity:
-        query = query.where(AlertEvent.severity == Severity(severity))
+        filters.append(AlertEvent.severity == Severity(severity))
     if status:
-        query = query.where(AlertEvent.status == AlertStatus(status))
+        filters.append(AlertEvent.status == AlertStatus(status))
     if device_id:
-        query = query.where(AlertEvent.device_id == device_id)
+        filters.append(AlertEvent.device_id == device_id)
 
-    query = query.offset((page - 1) * page_size).limit(page_size)
+    # Returned so the client can page through everything. Without it the client
+    # can only paginate the rows it happens to have been given, and the event
+    # list silently ends at one page_size worth of history.
+    total = (await session.execute(
+        select(func.count(AlertEvent.id)).where(*filters)
+    )).scalar_one()
+
+    query = (
+        select(AlertEvent)
+        .where(*filters)
+        .order_by(AlertEvent.triggered_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
     result = await session.execute(query)
     events = result.scalars().all()
-    return {"items": [_event_to_dict(e) for e in events], "page": page, "page_size": page_size}
+    return {
+        "items": [_event_to_dict(e) for e in events],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
 
 
 @router.get("/active-count")
