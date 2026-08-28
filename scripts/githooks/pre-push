@@ -1,12 +1,26 @@
 #!/usr/bin/env bash
-# 扫所有还没推到任何 remote 的 commit。
+# push 前的三道检查。提交路径上只留 pre-commit 的 gitleaks，其余都在这里 ——
+# 提交要快，push 才是"东西要出去了"的那一刻。
 #
-# 用 --not --remotes 而不是全量历史：仓库历史里已经有过泄露（见 CHANGELOG/安全基线
-# 记录），全量扫会永远红着，门禁就形同虚设。
+#   1. gitleaks   待推送的 commit 里有凭据 → 拦
+#   2. 安全关卡    相对 baseline 有新增 → 拦（跳过联网项，见下）
+#   3. fix: 提醒   fix 提交没带测试 → 只提醒，永远放行
+#
+# 整体绕过：git push --no-verify
 set -uo pipefail
 
 . "$(git rev-parse --show-toplevel)/scripts/githooks/lib.sh"
 
+REPO_ROOT=$(git rev-parse --show-toplevel)
+
+# ---------- 1. 凭据 ----------
+# 扫所有还没推到任何 remote 的 commit。
+#
+# 用 --not --remotes 而不是全量历史：仓库历史里已经有过泄露（见 CHANGELOG/安全基线
+# 记录），全量扫会永远红着，门禁就形同虚设。
+#
+# 和关卡里的 gitleaks 不重复：这里扫的是"这次要推出去的 commit"，能给出"历史还没上
+# 远端、现在还改得动"的处置建议；关卡那步是全历史相对 baseline 的增量。
 if ! run_gitleaks git /src --log-opts="--all --not --remotes"; then
     echo "" >&2
     echo "[gitleaks] 待推送的 commit 里有凭据，push 已阻止。" >&2
@@ -15,3 +29,62 @@ if ! run_gitleaks git /src --log-opts="--all --not --remotes"; then
     echo "  已经推上去的凭据只能靠轮换，删文件没用。" >&2
     exit 1
 fi
+
+# ---------- 2. 安全关卡 ----------
+# SKIP_NETWORK_SCANS=1 跳掉 semgrep / pip-audit / npm audit：这三项要现拉规则库和
+# advisory，在带 TLS 解密代理的公司网络下本来就是 CERTIFICATE_VERIFY_FAILED，留着
+# 等于每次 push 都红。剩下 gitleaks + bandit + trivy 是本地/带缓存的，缓存热的时候
+# 实测 16s。完整版（含联网三项）由 CI 跑：.github/workflows/security-gate.yml。
+#
+# 关卡整个建立在一次性容器上，docker 不在就一项都跑不了。那种情况下警告并放行 ——
+# 否则忘了开 Docker Desktop 就等于 push 全断，而这一步不是凭据门禁（那道在上面，
+# 已经过了）。
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    if ! SKIP_NETWORK_SCANS=1 bash "$REPO_ROOT/scripts/security-gate.sh"; then
+        echo "" >&2
+        echo "[安全关卡] 有相对 baseline 的新增，push 已阻止。" >&2
+        echo "  处置办法见关卡自己的输出（改代码 / 抑制并写理由 / 更新 baseline）。" >&2
+        echo "  确认是误报又赶时间：git push --no-verify" >&2
+        exit 1
+    fi
+else
+    echo "[安全关卡] 跳过：没有可用的 docker（启动 Docker Desktop 后重跑）" >&2
+fi
+
+# ---------- 3. fix: 提交补测试的提醒 ----------
+# 为什么只提醒不拦截：合理的 fix 有一批本来就测不了（改 Dockerfile、调一个配置值、
+# 只能在真机上验的采集口径）。拦下来的结果是养成 --no-verify 的手感，而 --no-verify
+# 是一刀切的 —— 它会把上面两道一起关掉。为一句提醒拉低凭据门禁的实际生效率不值得。
+#
+# 放在最后：警告要留在屏幕最下面才看得见。
+fix_commits_without_tests() {
+    local sha subject files
+    # --no-merges：合并提交的 diff 不是人写的。Revert 的标题以 Revert 开头，
+    # 天然不匹配 ^fix。
+    for sha in $(git rev-list --all --not --remotes --no-merges 2>/dev/null); do
+        subject=$(git log -1 --format=%s "$sha")
+        printf '%s' "$subject" | grep -qE '^fix(\([^)]*\))?!?:' || continue
+
+        files=$(git show --name-only --format= --diff-filter=ACMR "$sha")
+        # 只有动到有测试基建的源码目录才提醒。改 Dockerfile、compose、docs、yaml
+        # 配置的 fix 没有对应的单测可写，提醒它们等于制造噪音。
+        printf '%s\n' "$files" | grep -qE '^(backend/app/|frontend/src/)' || continue
+        printf '%s\n' "$files" \
+            | grep -qE '(^backend/tests/|(^|/)test_[^/]+\.py$|\.test\.(ts|tsx|js|jsx)$)' && continue
+
+        echo "  $(git log -1 --format='%h %s' "$sha")"
+    done
+}
+
+FLAGGED=$(fix_commits_without_tests)
+if [ -n "$FLAGGED" ]; then
+    echo "" >&2
+    echo "[提醒] 待推送的 fix 提交里，这些没有动任何测试文件：" >&2
+    echo "$FLAGGED" >&2
+    echo "  改完 bug 先问一句：能不能写一个「修之前会红」的用例？" >&2
+    echo "  能写就补上（git rebase -i 或追加一个 test: 提交）；确实写不了" >&2
+    echo "  （只能真机验、改的是配置或构建文件）就忽略这条，push 会照常继续。" >&2
+    echo "" >&2
+fi
+
+exit 0

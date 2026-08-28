@@ -67,11 +67,12 @@ cd frontend && npm install && npm run dev
 docker compose logs worker --tail 20 -f
 
 # 装 git hook（clone 后跑一次；hook 本体在 scripts/githooks/，只有 hooksPath 是本机配置）
-# pre-commit/pre-push 挡凭据（拦截），commit-msg 提醒 fix: 提交补回归测试（只提醒）
+# pre-commit 只挡凭据（要快）；pre-push = 凭据 + 安全关卡（拦截）+ fix: 补测试提醒（只提醒）
 bash scripts/install-git-hooks.sh
 
-# 发布前安全关卡（确定性，只报相对 security/*.json baseline 的新增）
-# CI 也自动跑：push main / tag v* / PR（.github/workflows/security-gate.yml）
+# 安全关卡（确定性，只报相对 security/*.json baseline 的新增）
+# pre-push 自动跑，带 SKIP_NETWORK_SCANS=1（约 16s）；完整版由 CI 跑：
+# push main / tag v* / PR（.github/workflows/security-gate.yml）
 bash scripts/security-gate.sh
 bash scripts/test-backend.sh   # 后端测试；脚本头注释解释了为什么绕 Docker 跑
 ```
