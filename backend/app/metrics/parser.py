@@ -98,6 +98,8 @@ def parse_value(xml_root: etree._Element, parser_config: dict, device_id: str, m
         results = _parse_xpath_multi(xml_root, parser_config, device_id, metric_name, now)
     elif parser_type == "regex_cdata":
         results = _parse_regex_cdata(xml_root, parser_config, device_id, metric_name, now)
+    elif parser_type == "regex_cdata_fields":
+        results = _parse_regex_cdata_fields(xml_root, parser_config, device_id, metric_name, now)
     else:
         return [MetricResult.failure(device_id, metric_name, f"Unknown parser type: {parser_type}")]
 
@@ -196,6 +198,65 @@ def _parse_regex_cdata(root, config, device_id, metric_name, now) -> list[Metric
         )]
 
     return [MetricResult(timestamp=now, device_id=device_id, metric_name=metric_name, value=round(value, 2))]
+
+
+def _parse_regex_cdata_fields(root, config, device_id, metric_name, now) -> list[MetricResult]:
+    """Sum the `<number> <label>` fields on one line, minus the ones in `exclude`.
+
+    For lines where a fixed capture-group expression cannot express the answer,
+    because the set of fields is not fixed. `top`'s `%Cpu(s)` is the case this
+    exists for.
+
+    Measured on PA-440 (4 cores, PAN-OS 11.x): the fields on that line do not
+    add up to 100, and the shortfall moves with load — sums of 33.3 / 39.9 /
+    53.0 / 86.6 / 92.5 across five samples four seconds apart. So `100 - id` is
+    not the utilisation: it read 86.7% and 100% on the two samples where the
+    process list accounted for 18.6% and 81.1% of CPU. `us` alone does track
+    the process list, but drops sy/ni/hi, which came to 11.6 points on the busy
+    sample — the difference between alerting and not, at a threshold of 80.
+    Summing everything that is not idle matched the process list on both
+    samples (22.1 vs 18.6, 86.5 vs 81.1).
+
+    Fields are captured by name rather than by position so that a top version
+    which adds a field (gnice, st) has it counted rather than silently dropped
+    — which is what made the fixed-group version unsafe to sum.
+    """
+    text = etree.tostring(root, method="text", encoding="unicode")
+    pattern = config["pattern"]
+    match = re.search(pattern, text)
+    if not match:
+        return [MetricResult.failure(device_id, metric_name, f"Regex '{pattern}' no match in CDATA")]
+
+    # The capture group narrows the search to one line; without one, patterns
+    # like `[\d.]+ \w+` would also match figures on the Mem / Swap lines.
+    segment = match.group(1) if match.groups() else match.group(0)
+
+    field_pattern = config["field_pattern"]
+    fields = re.findall(field_pattern, segment)
+    if not fields:
+        return [MetricResult.failure(
+            device_id, metric_name,
+            f"field_pattern '{field_pattern}' matched no fields in '{segment.strip()}'",
+        )]
+
+    try:
+        values = {name: float(raw) for raw, name in fields}
+    except ValueError:
+        return [MetricResult.failure(device_id, metric_name, f"Cannot parse fields: {fields}")]
+
+    exclude = config.get("exclude", [])
+    # A name that is not on the line means either a typo in the config or a
+    # changed output format. Left unchecked, the field it was meant to remove
+    # would simply be counted as load — a plausible-looking overestimate.
+    missing = [name for name in exclude if name not in values]
+    if missing:
+        return [MetricResult.failure(
+            device_id, metric_name,
+            f"excluded field(s) {missing} not on the line, found {sorted(values)}",
+        )]
+
+    total = sum(v for name, v in values.items() if name not in exclude)
+    return [MetricResult(timestamp=now, device_id=device_id, metric_name=metric_name, value=round(total, 2))]
 
 
 def parse_value_text(text: str, parser_config: dict, device_id: str, metric_name: str) -> list[MetricResult]:

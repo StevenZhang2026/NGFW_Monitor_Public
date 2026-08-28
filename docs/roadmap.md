@@ -4,6 +4,17 @@
 
 ## 未完成的功能
 
+- **数据面（DP）指标缺失**。`cpu_usage` 只是管理面；转发面要靠
+  `show running resource-monitor minute`，实测同一时刻 DP 各核 0~1%、MP 20~90%，
+  两者不能互相替代。那个响应还一并给出 packet buffer / packet descriptor /
+  sw tags descriptor 的 average+maximum。
+  做不成纯配置：响应是 `<dp0><cpu-load-average><entry><coreid>N` 下挂一个
+  **60 个逗号分隔的每秒采样**，现有 parser 类型都读不了；用 `type: xpath` 硬套会被
+  `[^\d.\-]` 把 `0,0,1,2` 拼成 `0012` → 12.0，得到一个看着合理的错数字。
+  另外 `metric_data` 主键是 (timestamp, device_id, metric_name)，**不含 labels**，
+  所以按 core 分点存不了（没有 Alembic，加不了列），必须先归并成一个值
+- `packet_descriptor`：`frontend/src/pages/Reports.tsx` 的 `METRIC_OPTIONS` 里列了它，
+  但 `builtin.yaml` 里没有这个指标 —— 报表里选了出不来数。数据源同上
 - Panorama 设备自动发现
 - 数据保留策略自动执行（TimescaleDB retention policy）
 - 多设备接入验证（PA-5500 / PA-7000 系列,接口命名与传感器布局不同）
@@ -11,10 +22,11 @@
 ## 待验证
 
 - 报表邮件端到端验证（配置 SMTP → 自动发送 → 收件人收到 PDF）
-- `cpu_usage` 解析修复后的真机验证（PA-440 上确认 `%Cpu(s)` 的 `id` 字段能匹配到），
-  并复核 CPU 告警阈值——新读数含 sy/ni/wa，比修复前高
 - `session_max` 的 `on_multiple`：多 DP 设备报的是每 DP 容量（sum）还是系统总量
   （first）待真机确认，在此之前它在 PA-5500/7000 上是硬失败
+- `cpu_usage` 的告警阈值（现 `>= 80`，duration 60s）待复核。指标口径已换成"非 id
+  字段求和"，80 这个数是按旧的 `us` 口径设的；且 duration 60s ≈ 单个采样，top 单次
+  迭代本身有量化噪声（真机相邻采样在 18~86 之间跳），容易被瞬时尖峰触发
 
 ## 优化事项
 

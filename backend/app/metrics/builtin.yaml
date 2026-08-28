@@ -7,18 +7,29 @@
   collector: panos_api
   command: "<show><system><resources></resources></system></show>"
   parser:
-    type: regex_cdata
-    # Read `id` (idle) and invert it, not `us` (user). `us` is one of eight
-    # fields on that line, so reporting it as "CPU 使用率" silently drops sy/ni/
-    # hi/si — a device at 45 us + 30 sy + 5 ni was reported as 45%. Inverting a
-    # single field also survives top's field list changing between versions,
-    # which summing the busy fields would not.
-    pattern: "%Cpu\\(s\\):.*?([\\d.]+)\\s+id"
-    calc: "100 - value0"
-    # 112.3% has been collected here. The management plane's %Cpu(s) is
-    # normalised across cores and cannot exceed 100, so anything outside this
-    # range is a parse that went wrong, not a reading — and stored as a number
-    # it would look authoritative forever.
+    type: regex_cdata_fields
+    # Sum every field on top's %Cpu(s) line except idle.
+    #
+    # Do not "read one field" here, in either direction. Measured on PA-440
+    # (4 cores, PAN-OS 11.x), the fields on that line do not add up to 100 and
+    # the shortfall moves with load — sums of 33.3 / 39.9 / 53.0 / 86.6 / 92.5
+    # across five samples four seconds apart:
+    #   - `100 - id` read 86.7% and 100% on samples where the process list
+    #     accounted for 18.6% and 81.1% of CPU. `id` is the least trustworthy
+    #     field on the line; a metric built on it reads near-pegged forever.
+    #   - `us` alone does track the process list, but drops sy/ni/hi — 11.6
+    #     points on the busy sample, which at a threshold of 80 is the
+    #     difference between alerting and not.
+    # Summing the non-idle fields matched the process list on both samples
+    # (22.1 vs 18.6, 86.5 vs 81.1). See parser.py for the measurements.
+    pattern: "%Cpu\\(s\\):(.*)"
+    field_pattern: "([\\d.]+)\\s+(\\w+)"
+    exclude: ["id"]
+    # `us` alone has been collected at 105.8 and 118.4 on this device, so some
+    # samples off this line are impossible whatever the formula — top's single
+    # -iteration output is quantised (a bare `31 us`, no decimal, shows up).
+    # Stored as a gauge such a figure looks authoritative forever and feeds
+    # threshold alerts, so out of range is a collection failure instead.
     range: [0, 100]
   data_type: gauge
   unit: "%"

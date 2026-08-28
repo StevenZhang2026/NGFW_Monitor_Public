@@ -15,9 +15,18 @@ BUILTIN = yaml.safe_load(
     (Path(__file__).resolve().parent.parent / "app" / "metrics" / "builtin.yaml").read_text()
 )
 
-# 走 _reduce_matches（有多值保护）的单值解析器。regex_cdata 不在其中——它用
-# re.search 只取第一个匹配，声明 on_multiple 也不会被读，所以不能要求它声明。
+# 走 _reduce_matches（有多值保护）的单值解析器。regex_cdata 和
+# regex_cdata_fields 不在其中——它们用 re.search 只取第一个匹配，声明 on_multiple
+# 也不会被读，所以不能要求它们声明。
 REDUCED_TYPES = {"xpath", "regex"}
+
+# 各 parser 类型必须写全的键。缺了不会在启动时报错，而是等到采集时抛 KeyError，
+# 在日志里表现为一条只有键名的失败信息。
+REQUIRED_PARSER_KEYS = {
+    # exclude 也要求写出来：不写等于"这行上所有字段都算负载"，在 %Cpu(s) 上会得到
+    # 一个把 idle 也算进去的、看着合理的高估
+    "regex_cdata_fields": {"pattern", "field_pattern", "exclude"},
+}
 
 # 故意不声明 on_multiple 的指标 → 为什么。往这里加条目就是在说"这个指标在多 DP
 # 设备上会硬失败，我知道，并且宁可这样"。
@@ -51,6 +60,16 @@ def test_single_value_metrics_declare_on_multiple():
         "sum 用于可加的总量（会话数、cps、吞吐），max 用于饱和度读数（缓冲区、"
         "描述符）；确实无法判断就加进 ON_MULTIPLE_EXEMPT 说明理由。"
     )
+
+
+def test_parsers_declare_their_required_keys():
+    missing = {
+        m["name"]: sorted(required - m["parser"].keys())
+        for m in BUILTIN
+        for required in [REQUIRED_PARSER_KEYS.get(m["parser"].get("type"), set())]
+        if required - m["parser"].keys()
+    }
+    assert missing == {}, f"parser 配置缺键：{missing}"
 
 
 def test_declared_reducers_exist():
