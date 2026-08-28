@@ -3,9 +3,10 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+    # 容器内是 8443/8080 而不是 443/80：nginx 以非 root 运行，绑不了特权端口
     ports:
-      - "3000:443"
-      - "3080:80"
+      - "3000:8443"
+      - "3080:8080"
     volumes:
       - ./certs:/etc/nginx/certs:ro
     depends_on:
@@ -46,7 +47,9 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: celery -A app.tasks.celery_app beat -l info
+    # schedule 文件默认写在 CWD(/app)，容器改非 root 后那里不可写。
+    # 内容只是各任务的上次执行时间，容器重建本来就会丢，放 /tmp 等价。
+    command: celery -A app.tasks.celery_app beat -l info --schedule=/tmp/celerybeat-schedule
     env_file:
       - .env
     depends_on:
