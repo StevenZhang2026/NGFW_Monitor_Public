@@ -16,8 +16,10 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    # 只绑回环：8000 是明文 HTTP，发布到 0.0.0.0 等于给了一条绕过 nginx TLS 的
+    # 旁路（登录口令和 JWT 在 LAN 上明文过网）。本机 curl 调试照旧可用。
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     env_file:
       - .env
     volumes:
@@ -60,11 +62,15 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-ngfw_monitor}
       POSTGRES_USER: ${POSTGRES_USER:-ngfw}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      # 必填而非默认回落：默认值会让忘配 .env 的安装静默用上公开已知的口令，
+      # 而这个库里存着设备凭据。未设置时 compose 直接报错退出。
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 未设置，请在 .env 中配置}
     volumes:
       - pgdata:/home/postgres/pgdata/data
+    # 只绑回环：库里有设备凭据（当前还是明文存储）。宿主上的 psql / pg_dump
+    # 迁移不受影响，跨主机访问请走 SSH 隧道。
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ngfw}"]
       interval: 5s
@@ -73,8 +79,10 @@ services:
 
   redis:
     image: redis:7-alpine
+    # 只绑回环：Redis 无认证，且它同时是 Celery broker —— 发布到 0.0.0.0 时
+    # LAN 内任意主机都能往队列投递任务消息让 worker 执行，无需任何账号。
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redisdata:/data
     healthcheck:
