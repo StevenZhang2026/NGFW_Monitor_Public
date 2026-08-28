@@ -126,6 +126,7 @@ bash scripts/security-gate.sh
   `devices` 的新接口都要显式过 `app/auth/scope.py`；跨设备聚合时"没传 device_id"**不等于
   不过滤**（用 `scoped_device_sql()`），授权检查也不能只写在 if/elif 的某个分支里
 - **Copilot 的每个 action 都是一条独立数据出口**，加 action 按"新接口"审授权，不是按"查询函数"
+- 安全关卡和扫描器对越权是**零覆盖**（只匹配已知坏模式）：加接口 / 加 action 后必须跑一次 `/security-review` 看 diff，这是唯一能发现 scope 漏掉的环节
 - 凭据字段脱敏（`_is_secret_key`）必须配回写保护：前端会把读到的 `***` 原样提交回来，
   直接落库就把真凭据覆盖了。约定掩码值 = 保持不变
 
