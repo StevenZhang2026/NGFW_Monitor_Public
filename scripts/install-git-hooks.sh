@@ -11,7 +11,7 @@ REPO_ROOT=$(git rev-parse --show-toplevel)
 HOOKS_DIR=scripts/githooks   # 相对仓库根，换机器换路径都不用改
 cd "$REPO_ROOT"
 
-chmod +x "$HOOKS_DIR/pre-commit" "$HOOKS_DIR/pre-push"
+chmod +x "$HOOKS_DIR/pre-commit" "$HOOKS_DIR/pre-push" "$HOOKS_DIR/commit-msg"
 git config core.hooksPath "$HOOKS_DIR"
 
 # 旧版本把 hook 生成到 .git/hooks。设了 hooksPath 之后 git 不再看那个目录，留着只会
@@ -25,5 +25,5 @@ done
 
 # 变量名后面紧跟全角括号必须用 ${}：bash 会把「（」的字节当成标识符的一部分，
 # 于是 $HOOKS_DIR（…） 展开成 unbound variable，set -e 直接让脚本退出。
-echo "已设置 core.hooksPath = ${HOOKS_DIR}（pre-commit + pre-push）"
+echo "已设置 core.hooksPath = ${HOOKS_DIR}（pre-commit + pre-push 挡凭据，commit-msg 提醒 fix 补测试）"
 echo "自检:   随便 git add 一个含密码的文件试试，应该被挡住"
