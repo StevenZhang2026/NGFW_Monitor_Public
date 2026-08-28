@@ -8,7 +8,18 @@
   command: "<show><system><resources></resources></system></show>"
   parser:
     type: regex_cdata
-    pattern: "%Cpu\\(s\\):\\s+(\\d+\\.?\\d*)\\s+us"
+    # Read `id` (idle) and invert it, not `us` (user). `us` is one of eight
+    # fields on that line, so reporting it as "CPU 使用率" silently drops sy/ni/
+    # hi/si — a device at 45 us + 30 sy + 5 ni was reported as 45%. Inverting a
+    # single field also survives top's field list changing between versions,
+    # which summing the busy fields would not.
+    pattern: "%Cpu\\(s\\):.*?([\\d.]+)\\s+id"
+    calc: "100 - value0"
+    # 112.3% has been collected here. The management plane's %Cpu(s) is
+    # normalised across cores and cannot exceed 100, so anything outside this
+    # range is a parse that went wrong, not a reading — and stored as a number
+    # it would look authoritative forever.
+    range: [0, 100]
   data_type: gauge
   unit: "%"
   interval: 60
@@ -29,6 +40,9 @@
     # the prefix is simply left open.
     pattern: "[KMG]iB Mem\\s*:\\s*([\\d.]+)\\s+total.*?([\\d.]+)\\s+used"
     calc: "value1 / value0 * 100"
+    # A ratio that lands outside 0-100 means the pattern picked up the wrong two
+    # figures. Same reasoning as cpu_usage.
+    range: [0, 100]
   data_type: gauge
   unit: "%"
   interval: 60
@@ -44,6 +58,10 @@
   parser:
     type: xpath
     expr: ".//num-active"
+    # PA-5500 / PA-7000 answer `show session info` once per dataplane, so this
+    # expression matches once per DP there and the parser refuses to guess (see
+    # parser.py). Active sessions are additive across dataplanes, so sum.
+    on_multiple: sum
   data_type: gauge
   unit: "sessions"
   interval: 60
@@ -59,6 +77,13 @@
   parser:
     type: xpath
     expr: ".//num-max"
+    # Deliberately no on_multiple: it is not known whether a multi-dataplane
+    # device reports its own per-DP capacity (then: sum) or repeats one
+    # system-wide limit (then: first). Guessing sum would multiply the capacity
+    # by the DP count, and this figure is the denominator of session
+    # utilisation — a wrong value here inflates headroom and hides saturation.
+    # So it stays a hard failure until it can be read off a real PA-5500/7000,
+    # at which point this is a one-line change.
   data_type: gauge
   unit: "sessions"
   interval: 300
@@ -74,6 +99,8 @@
   parser:
     type: xpath
     expr: ".//cps"
+    # Additive across dataplanes, same as session_count.
+    on_multiple: sum
   data_type: gauge
   unit: "cps"
   interval: 60
@@ -89,6 +116,8 @@
   parser:
     type: xpath
     expr: ".//kbps"
+    # Additive across dataplanes, same as session_count.
+    on_multiple: sum
   data_type: gauge
   unit: "kbps"
   interval: 60

@@ -11,6 +11,10 @@
 ## 待验证
 
 - 报表邮件端到端验证（配置 SMTP → 自动发送 → 收件人收到 PDF）
+- `cpu_usage` 解析修复后的真机验证（PA-440 上确认 `%Cpu(s)` 的 `id` 字段能匹配到），
+  并复核 CPU 告警阈值——新读数含 sy/ni/wa，比修复前高
+- `session_max` 的 `on_multiple`：多 DP 设备报的是每 DP 容量（sum）还是系统总量
+  （first）待真机确认，在此之前它在 PA-5500/7000 上是硬失败
 
 ## 优化事项
 
@@ -21,7 +25,8 @@
 
 ## 已知 bug
 
-- `cpu_usage` 曾采到 112.3%（`%Cpu(s)` 不应超过 100）,解析规则需排查。影响 CPU 阈值告警和容量预测
+- `ha_state` 取的是 `.//group/local-info/state`,值是 `active`/`passive` 字符串,而单值
+  解析器一律走 `float()`。配了 HA 的设备上这个指标只会产出 "Cannot parse value" 失败
 
 ## 安全
 

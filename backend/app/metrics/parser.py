@@ -27,6 +27,41 @@ _REDUCERS = {
 }
 
 
+# Named expressions a metric definition can ask for in `parser.calc`. A fixed
+# set rather than an eval'd expression: these come from admin-editable config,
+# so an expression language here would be both an injection surface and a way
+# for a typo to produce a plausible-looking wrong number.
+_CALCS = {
+    "value1 / value0 * 100": lambda vs: vs[1] / vs[0] * 100 if vs[0] > 0 else 0.0,
+    "100 - value0": lambda vs: 100 - vs[0],
+}
+
+
+def _enforce_range(results, config):
+    """Fail any value outside the range the metric declares in `parser.range`.
+
+    A CPU reading of 112.3% is not a measurement, it is a parse that went wrong
+    upstream — and once stored as a number it looks authoritative forever, feeds
+    threshold alerts and skews capacity forecasts. Declaring a range turns that
+    into a collection failure, which is visible.
+
+    Optional: a metric with no declared range is unchanged.
+    """
+    bounds = config.get("range")
+    if not bounds:
+        return results
+
+    low, high = float(bounds[0]), float(bounds[1])
+    return [
+        r if not r.success or low <= r.value <= high
+        else MetricResult.failure(
+            r.device_id, r.metric_name,
+            f"value {r.value} outside declared range [{low}, {high}]",
+        )
+        for r in results
+    ]
+
+
 def _reduce_matches(values, config, device_id, metric_name, source):
     """Collapse several matches into one value. Returns (value, failure).
 
@@ -58,13 +93,15 @@ def parse_value(xml_root: etree._Element, parser_config: dict, device_id: str, m
     now = datetime.now(timezone.utc)
 
     if parser_type == "xpath":
-        return _parse_xpath(xml_root, parser_config, device_id, metric_name, now)
+        results = _parse_xpath(xml_root, parser_config, device_id, metric_name, now)
     elif parser_type == "xpath_multi":
-        return _parse_xpath_multi(xml_root, parser_config, device_id, metric_name, now)
+        results = _parse_xpath_multi(xml_root, parser_config, device_id, metric_name, now)
     elif parser_type == "regex_cdata":
-        return _parse_regex_cdata(xml_root, parser_config, device_id, metric_name, now)
+        results = _parse_regex_cdata(xml_root, parser_config, device_id, metric_name, now)
     else:
         return [MetricResult.failure(device_id, metric_name, f"Unknown parser type: {parser_type}")]
+
+    return _enforce_range(results, parser_config)
 
 
 def _parse_xpath(root, config, device_id, metric_name, now) -> list[MetricResult]:
@@ -137,17 +174,26 @@ def _parse_regex_cdata(root, config, device_id, metric_name, now) -> list[Metric
     if not match:
         return [MetricResult.failure(device_id, metric_name, f"Regex '{pattern}' no match in CDATA")]
 
-    groups = match.groups()
     calc = config.get("calc")
+    if calc is not None and calc not in _CALCS:
+        return [MetricResult.failure(
+            device_id, metric_name,
+            f"unknown calc '{calc}' — expected one of {sorted(_CALCS)}",
+        )]
 
-    if calc and len(groups) >= 2:
-        values = [float(g) for g in groups]
-        if calc == "value1 / value0 * 100":
-            value = values[1] / values[0] * 100 if values[0] > 0 else 0.0
+    groups = match.groups()
+    try:
+        if calc is None:
+            value = float(groups[0])
         else:
-            value = values[0]
-    else:
-        value = float(groups[0])
+            value = _CALCS[calc]([float(g) for g in groups])
+    except (ValueError, TypeError):
+        return [MetricResult.failure(device_id, metric_name, f"Cannot parse values: {groups}")]
+    except IndexError:
+        return [MetricResult.failure(
+            device_id, metric_name,
+            f"calc '{calc}' needs more capture groups than pattern '{pattern}' has",
+        )]
 
     return [MetricResult(timestamp=now, device_id=device_id, metric_name=metric_name, value=round(value, 2))]
 
@@ -158,11 +204,13 @@ def parse_value_text(text: str, parser_config: dict, device_id: str, metric_name
     now = datetime.now(timezone.utc)
 
     if parser_type == "regex":
-        return _parse_regex(text, parser_config, device_id, metric_name, now)
+        results = _parse_regex(text, parser_config, device_id, metric_name, now)
     elif parser_type == "regex_multi":
-        return _parse_regex_multi(text, parser_config, device_id, metric_name, now)
+        results = _parse_regex_multi(text, parser_config, device_id, metric_name, now)
     else:
         return [MetricResult.failure(device_id, metric_name, f"Unknown text parser type: {parser_type}")]
+
+    return _enforce_range(results, parser_config)
 
 
 def _parse_regex(text, config, device_id, metric_name, now) -> list[MetricResult]:

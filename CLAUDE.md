@@ -72,6 +72,7 @@ bash scripts/install-git-hooks.sh
 # 发布前安全关卡（确定性，只报相对 security/*.json baseline 的新增）
 # CI 也自动跑：push main / tag v* / PR（.github/workflows/security-gate.yml）
 bash scripts/security-gate.sh
+bash scripts/test-backend.sh   # 后端测试；脚本头注释解释了为什么绕 Docker 跑
 ```
 
 ## 目录结构（只列看名字猜不到的）
@@ -111,7 +112,7 @@ bash scripts/security-gate.sh
 - `worker_prefetch_multiplier=1`：worker 预取的任务在队列深度里看不见，积压会藏在 worker 内存里，还会在里面熬过 `expires` 被丢掉
 - 跳过计数是**增量消费**的（`take_skip_deltas` 读一次就推进水位），所以「跳周期」是事件不是状态，下次自检没有新增就自动恢复；API 展示读累计值，不推进水位
 - PA-440 管理面资源有限，并发连接不能太多（当前已优化为单连接复用）
-- `cpu_usage` 实测采到过 112.3%（`%Cpu(s)` 不应 >100），解析规则有问题未修，别信这个指标的绝对值
+- `cpu_usage` 已改成取 `id` 反算并声明 `range: [0,100]`；**修复前的历史数据只是用户态，系统性低估**，跨修复时刻看曲线会有台阶，旧的 CPU 阈值也是按低估值设的
 
 ### 数据库与 ORM
 
