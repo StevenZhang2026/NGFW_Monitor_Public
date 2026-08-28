@@ -10,7 +10,7 @@ from app.models.metric import MetricDefinition
 from app.metrics.rate import counter_rate_config, counter_rate_source
 from app.models.user import User, UserRole
 from app.auth.security import get_current_user, require_role
-from app.auth.scope import check_device_in_scope
+from app.auth.scope import check_device_in_scope, scoped_device_sql
 
 router = APIRouter()
 
@@ -204,6 +204,9 @@ async def query_metric_data(
     session: AsyncSession = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
+    if not await check_device_in_scope(device_id, user, session):
+        raise HTTPException(status_code=403, detail="No access to this device")
+
     if instance:
         name_filter = f"{metric_name}::{instance}"
         name_condition = "metric_name = :metric_name"
@@ -326,10 +329,9 @@ async def query_acc_trend(
 
     label_key = "application" if metric_name == "acc_application" else "threat_name"
 
-    device_filter = "AND device_id = :device_id" if device_id else ""
-    params: dict = {"metric_prefix": f"{metric_name}::%", "start": start, "end": end}
-    if device_id:
-        params["device_id"] = device_id
+    # 省略 device_id 时依然要按 scope 限定，否则受限用户拿到的是全设备聚合
+    device_filter, device_params = await scoped_device_sql(user, session, device_id)
+    params: dict = {"metric_prefix": f"{metric_name}::%", "start": start, "end": end, **device_params}
 
     VALID_SEVERITIES = {"critical", "high", "medium", "low", "informational"}
     severity_filter = ""
@@ -383,9 +385,10 @@ async def query_acc_trend(
         GROUP BY ts, item_name
         ORDER BY ts
     """)
-    series_params: dict = {"metric_prefix": f"{metric_name}::%", "start": start, "end": end, "items": top_items}
-    if device_id:
-        series_params["device_id"] = device_id
+    series_params: dict = {
+        "metric_prefix": f"{metric_name}::%", "start": start, "end": end,
+        "items": top_items, **device_params,
+    }
     if "severities" in params:
         series_params["severities"] = params["severities"]
     result = await session.execute(series_query, series_params)
@@ -427,10 +430,9 @@ async def query_acc_ranking(
     if not start:
         start = end - timedelta(days=7)
 
-    device_filter = "AND device_id = :device_id" if device_id else ""
-    params: dict = {"metric_prefix": f"{metric_name}::%", "start": start, "end": end}
-    if device_id:
-        params["device_id"] = device_id
+    # 同 acc-trend：不传 device_id 也要按 scope 限定
+    device_filter, device_params = await scoped_device_sql(user, session, device_id)
+    params: dict = {"metric_prefix": f"{metric_name}::%", "start": start, "end": end, **device_params}
 
     # limit=0 means return the full ranking
     limit_clause = ""

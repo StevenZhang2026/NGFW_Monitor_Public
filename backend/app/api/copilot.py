@@ -9,6 +9,7 @@ from app.models.database import get_session
 from app.models.setting import SystemSetting
 from app.models.user import User
 from app.auth.security import get_current_user
+from app.auth.scope import scoped_device_sql
 from app.copilot.intent import parse_intent, IntentError
 from app.copilot.formatter import format_response
 
@@ -36,20 +37,22 @@ async def _get_ai_config(session: AsyncSession) -> dict:
 
 
 async def _execute_query(action: str, params: dict, session: AsyncSession, user: User) -> dict:
+    # 每个 action 都要拿到 user：Copilot 走的是和 REST 接口同一份数据，
+    # 分组授权必须同样生效，否则它就成了绕过 scope 的旁路。
     if action == "acc_ranking":
-        return await _query_acc_ranking(params, session)
+        return await _query_acc_ranking(params, session, user)
     elif action == "acc_trend":
-        return await _query_acc_trend(params, session)
+        return await _query_acc_trend(params, session, user)
     elif action == "metric_data":
         return await _query_metric_data(params, session, user)
     elif action == "alert_events":
-        return await _query_alerts(params, session)
+        return await _query_alerts(params, session, user)
     elif action == "device_status":
-        return await _query_devices(session)
+        return await _query_devices(session, user)
     return {}
 
 
-async def _query_acc_ranking(params: dict, session: AsyncSession) -> dict:
+async def _query_acc_ranking(params: dict, session: AsyncSession, user: User) -> dict:
     metric_name = params.get("metric_name", "acc_application")
     days = params.get("days", 7)
     limit = params.get("limit", 10)
@@ -58,12 +61,14 @@ async def _query_acc_ranking(params: dict, session: AsyncSession) -> dict:
     start = end - timedelta(days=days)
     label_key = "application" if metric_name == "acc_application" else "threat_name"
 
+    device_filter, device_params = await scoped_device_sql(user, session)
     query = text(f"""
         SELECT labels->>'{label_key}' AS name,
                SUM(value) AS total
         FROM metric_data
         WHERE metric_name LIKE :prefix
           AND timestamp >= :start AND timestamp <= :end
+          {device_filter}
           AND labels->>'{label_key}' IS NOT NULL
         GROUP BY name
         ORDER BY total DESC
@@ -71,7 +76,7 @@ async def _query_acc_ranking(params: dict, session: AsyncSession) -> dict:
     """)
     result = await session.execute(query, {
         "prefix": f"{metric_name}::%",
-        "start": start, "end": end, "limit": limit,
+        "start": start, "end": end, "limit": limit, **device_params,
     })
     rows = result.fetchall()
 
@@ -81,7 +86,7 @@ async def _query_acc_ranking(params: dict, session: AsyncSession) -> dict:
         return {"items": [{"name": r.name, "count": int(r.total)} for r in rows]}
 
 
-async def _query_acc_trend(params: dict, session: AsyncSession) -> dict:
+async def _query_acc_trend(params: dict, session: AsyncSession, user: User) -> dict:
     metric_name = params.get("metric_name", "acc_application")
     days = params.get("days", 7)
     top_n = params.get("top_n", 10)
@@ -90,16 +95,18 @@ async def _query_acc_trend(params: dict, session: AsyncSession) -> dict:
     start = end - timedelta(days=days)
     label_key = "application" if metric_name == "acc_application" else "threat_name"
 
+    device_filter, device_params = await scoped_device_sql(user, session)
     query = text(f"""
         SELECT labels->>'{label_key}' AS name, SUM(value) AS total
         FROM metric_data
         WHERE metric_name LIKE :prefix
           AND timestamp >= :start AND timestamp <= :end
+          {device_filter}
           AND labels->>'{label_key}' IS NOT NULL
         GROUP BY name ORDER BY total DESC LIMIT :top_n
     """)
     result = await session.execute(query, {
-        "prefix": f"{metric_name}::%", "start": start, "end": end, "top_n": top_n,
+        "prefix": f"{metric_name}::%", "start": start, "end": end, "top_n": top_n, **device_params,
     })
     items = [r.name for r in result.fetchall()]
 
@@ -178,7 +185,8 @@ async def _query_metric_data(params: dict, session: AsyncSession, user: User) ->
     }
 
 
-async def _query_alerts(params: dict, session: AsyncSession) -> dict:
+async def _query_alerts(params: dict, session: AsyncSession, user: User) -> dict:
+    from app.auth.scope import get_scoped_device_ids
     from app.models.alert import AlertEvent, Severity, AlertStatus
     days = params.get("days", 7)
     severity = params.get("severity")
@@ -186,6 +194,10 @@ async def _query_alerts(params: dict, session: AsyncSession) -> dict:
 
     start = datetime.now(timezone.utc) - timedelta(days=days)
     query = select(AlertEvent).where(AlertEvent.triggered_at >= start)
+
+    scoped_ids = await get_scoped_device_ids(user, session)
+    if scoped_ids is not None:
+        query = query.where(AlertEvent.device_id.in_(scoped_ids))
 
     if severity:
         query = query.where(AlertEvent.severity == Severity(severity))
@@ -206,9 +218,9 @@ async def _query_alerts(params: dict, session: AsyncSession) -> dict:
     } for e in events]}
 
 
-async def _query_devices(session: AsyncSession) -> dict:
-    from app.models.device import Device
-    result = await session.execute(select(Device))
+async def _query_devices(session: AsyncSession, user: User) -> dict:
+    from app.auth.scope import filter_devices_query
+    result = await session.execute(await filter_devices_query(user, session))
     devices = result.scalars().all()
     return {"items": [{
         "name": d.name,

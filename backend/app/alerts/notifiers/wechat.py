@@ -1,6 +1,7 @@
 import httpx
 
 from app.alerts.notifiers.base import BaseNotifier, AlertMessage, SendResult
+from app.outbound import outbound_verify, tls_error_hint
 
 SEVERITY_EMOJI = {
     "critical": "🔴",
@@ -34,7 +35,8 @@ class WechatNotifier(BaseNotifier):
         }
 
         try:
-            async with httpx.AsyncClient(timeout=10, verify=False) as client:
+            # webhook_url embeds the bot key — verify the peer.
+            async with httpx.AsyncClient(timeout=10, verify=outbound_verify()) as client:
                 response = await client.post(webhook_url, json=payload)
                 data = response.json()
                 if data.get("errcode") != 0:
@@ -42,7 +44,7 @@ class WechatNotifier(BaseNotifier):
                     return SendResult(success=False, error=f"企业微信返回错误: {msg}")
                 return SendResult(success=True)
         except Exception as e:
-            return SendResult(success=False, error=f"请求失败: {e}")
+            return SendResult(success=False, error=f"请求失败: {e}{tls_error_hint(e)}")
 
     async def test(self, channel_config: dict) -> SendResult:
         test_alert = AlertMessage(

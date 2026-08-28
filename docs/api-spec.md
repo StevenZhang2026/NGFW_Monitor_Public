@@ -191,6 +191,10 @@ Authorization: Bearer <token>
 
 ## Metric Data 指标数据查询
 
+> 分组授权：本节所有查询都受调用者的设备范围限制。显式指定范围外的 `device_id` 返回
+> `403 No access to this device`；不指定 `device_id` 的跨设备聚合只统计范围内设备
+> （未绑定任何分组的用户视为全局可见）。
+
 ### GET /metrics/data
 查询指标时序数据。
 
@@ -273,17 +277,20 @@ Authorization: Bearer <token>
 - `status` — firing/resolved
 - `device_id`
 - `start`, `end`
-- `page`, `page_size`
+- `page`, `page_size`（page_size 默认 50，上限 200）
+
+**Response:** `{ items, total, page, page_size }` — `total` 是过滤后的总条数，供前端分页
 
 ### POST /alerts/events/{id}/acknowledge
-确认告警。
+确认告警。范围外设备的事件按不存在处理，返回 `404`。批量确认同理，只作用于范围内事件。
 
 ---
 
 ## Notification Channels 通知渠道
 
 ### GET /notifications/channels
-获取通知渠道列表。
+获取通知渠道列表。`config` 里值本身即凭据的字段（`webhook_url`、`password`、`token`、
+`api_key` 等）一律回显为 `***`。更新时把 `***` 原样提交表示"保持不变"。
 
 ### POST /notifications/channels
 创建通知渠道。

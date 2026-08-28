@@ -3,9 +3,10 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+    # 容器内是 8443/8080 而不是 443/80：nginx 以非 root 运行，绑不了特权端口
     ports:
-      - "3000:443"
-      - "3080:80"
+      - "3000:8443"
+      - "3080:8080"
     volumes:
       - ./certs:/etc/nginx/certs:ro
     depends_on:
@@ -15,8 +16,10 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    # 只绑回环：8000 是明文 HTTP，发布到 0.0.0.0 等于给了一条绕过 nginx TLS 的
+    # 旁路（登录口令和 JWT 在 LAN 上明文过网）。本机 curl 调试照旧可用。
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     env_file:
       - .env
     volumes:
@@ -46,7 +49,9 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: celery -A app.tasks.celery_app beat -l info
+    # schedule 文件默认写在 CWD(/app)，容器改非 root 后那里不可写。
+    # 内容只是各任务的上次执行时间，容器重建本来就会丢，放 /tmp 等价。
+    command: celery -A app.tasks.celery_app beat -l info --schedule=/tmp/celerybeat-schedule
     env_file:
       - .env
     depends_on:
@@ -57,11 +62,15 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-ngfw_monitor}
       POSTGRES_USER: ${POSTGRES_USER:-ngfw}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      # 必填而非默认回落：默认值会让忘配 .env 的安装静默用上公开已知的口令，
+      # 而这个库里存着设备凭据。未设置时 compose 直接报错退出。
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 未设置，请在 .env 中配置}
     volumes:
       - pgdata:/home/postgres/pgdata/data
+    # 只绑回环：库里有设备凭据（当前还是明文存储）。宿主上的 psql / pg_dump
+    # 迁移不受影响，跨主机访问请走 SSH 隧道。
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ngfw}"]
       interval: 5s
@@ -70,8 +79,10 @@ services:
 
   redis:
     image: redis:7-alpine
+    # 只绑回环：Redis 无认证，且它同时是 Celery broker —— 发布到 0.0.0.0 时
+    # LAN 内任意主机都能往队列投递任务消息让 worker 执行，无需任何账号。
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redisdata:/data
     healthcheck:

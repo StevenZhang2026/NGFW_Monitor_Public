@@ -45,6 +45,34 @@ async def filter_devices_query(user: User, session: AsyncSession):
     return query
 
 
+async def scoped_device_sql(
+    user: User, session: AsyncSession, device_id: str = ""
+) -> tuple[str, dict]:
+    """SQL fragment + binds restricting a raw metric_data query to this user's scope.
+
+    Returns something appendable to a WHERE clause (`AND device_id = ...`) plus the
+    parameters it references.
+
+    An empty `device_id` means "every device in scope" — it must NOT mean "no
+    filter", or a scoped user asking for a cross-device aggregate silently gets a
+    global one. Callers passing an explicit `device_id` should still run
+    `check_device_in_scope` first so the answer is 403 rather than an empty chart.
+
+    A scoped user whose groups contain no devices yields `AND FALSE`: an empty list
+    is the one case that must stay fail-closed, and `= ANY(:ids)` with an empty
+    list would leave asyncpg unable to infer the array element type.
+    """
+    if device_id:
+        return "AND device_id = :device_id", {"device_id": device_id}
+
+    scoped_ids = await get_scoped_device_ids(user, session)
+    if scoped_ids is None:
+        return "", {}
+    if not scoped_ids:
+        return "AND FALSE", {}
+    return "AND device_id = ANY(:scoped_device_ids)", {"scoped_device_ids": scoped_ids}
+
+
 async def check_device_in_scope(device_id: str, user: User, session: AsyncSession) -> bool:
     """Check if a specific device is within the user's scope."""
     scoped_ids = await get_scoped_device_ids(user, session)

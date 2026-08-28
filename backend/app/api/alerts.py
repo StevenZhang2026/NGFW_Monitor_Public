@@ -130,23 +130,40 @@ async def list_events(
     session: AsyncSession = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    query = select(AlertEvent).order_by(AlertEvent.triggered_at.desc())
-
+    filters = []
     scoped_ids = await get_scoped_device_ids(user, session)
     if scoped_ids is not None:
-        query = query.where(AlertEvent.device_id.in_(scoped_ids))
+        filters.append(AlertEvent.device_id.in_(scoped_ids))
 
     if severity:
-        query = query.where(AlertEvent.severity == Severity(severity))
+        filters.append(AlertEvent.severity == Severity(severity))
     if status:
-        query = query.where(AlertEvent.status == AlertStatus(status))
+        filters.append(AlertEvent.status == AlertStatus(status))
     if device_id:
-        query = query.where(AlertEvent.device_id == device_id)
+        filters.append(AlertEvent.device_id == device_id)
 
-    query = query.offset((page - 1) * page_size).limit(page_size)
+    # Returned so the client can page through everything. Without it the client
+    # can only paginate the rows it happens to have been given, and the event
+    # list silently ends at one page_size worth of history.
+    total = (await session.execute(
+        select(func.count(AlertEvent.id)).where(*filters)
+    )).scalar_one()
+
+    query = (
+        select(AlertEvent)
+        .where(*filters)
+        .order_by(AlertEvent.triggered_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
     result = await session.execute(query)
     events = result.scalars().all()
-    return {"items": [_event_to_dict(e) for e in events], "page": page, "page_size": page_size}
+    return {
+        "items": [_event_to_dict(e) for e in events],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
 
 
 @router.get("/active-count")
@@ -232,10 +249,12 @@ async def batch_acknowledge_events(
         query = query.where(AlertEvent.id.in_(req.event_ids))
     elif req.rule_id:
         query = query.where(AlertEvent.rule_id == req.rule_id)
-    else:
-        scoped_ids = await get_scoped_device_ids(user, session)
-        if scoped_ids is not None:
-            query = query.where(AlertEvent.device_id.in_(scoped_ids))
+
+    # scope 过滤要无条件生效：只放在 else 分支里的话，带 event_ids / rule_id
+    # 的调用就能确认（静音）范围外设备的告警。
+    scoped_ids = await get_scoped_device_ids(user, session)
+    if scoped_ids is not None:
+        query = query.where(AlertEvent.device_id.in_(scoped_ids))
 
     result = await session.execute(query)
     events = result.scalars().all()
@@ -255,9 +274,13 @@ async def acknowledge_event(
     user: User = Depends(get_current_user),
 ):
     from datetime import datetime, timezone
+    from app.auth.scope import check_device_in_scope
     result = await session.execute(select(AlertEvent).where(AlertEvent.id == event_id))
     event = result.scalar_one_or_none()
     if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+    # 范围外的事件按"不存在"处理，不泄露它的存在
+    if event.device_id and not await check_device_in_scope(event.device_id, user, session):
         raise HTTPException(status_code=404, detail="Event not found")
     event.status = AlertStatus.acknowledged
     event.acknowledged_at = datetime.now(timezone.utc)

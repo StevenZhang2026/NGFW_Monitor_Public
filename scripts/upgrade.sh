@@ -49,6 +49,13 @@ fi
 info "重建镜像..."
 $COMPOSE_CMD build --quiet
 
+# 报表卷属主修正：容器改为以 uid 1000 运行后，早先由 root 建出来的
+# reportdata 卷变成只读，报表生成会失败。幂等，属主已对时是空操作。
+info "修正报表目录属主..."
+$COMPOSE_CMD run --rm --no-deps --user root --entrypoint sh backend \
+    -c 'chown -R 1000:1000 /app/data' >/dev/null 2>&1 \
+    || warn "报表目录属主修正失败，若报表生成报 Permission denied 请手动执行"
+
 # 滚动重启（先启动新容器再停旧的，减少停机时间）
 info "重启服务..."
 $COMPOSE_CMD up -d --remove-orphans
