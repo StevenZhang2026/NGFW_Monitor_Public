@@ -49,6 +49,15 @@ class Settings(BaseSettings):
     admin_password: str = "change-me"
     admin_email: str = "admin@example.com"
 
+    # Outbound TLS, for internet destinations only (LLM provider, chat webhooks).
+    # Device-side calls are a separate matter and stay unverified on purpose —
+    # a PA appliance on a management LAN presents a self-signed certificate.
+    # Defaults are correct for a real deployment; outbound_ca_bundle exists only
+    # for a dev machine on GlobalProtect, where a TLS-inspecting proxy re-signs
+    # the chain with a private root CA.
+    outbound_tls_verify: bool = True
+    outbound_ca_bundle: str | None = None
+
     # Feishu (optional)
     feishu_webhook_url: str | None = None
     feishu_app_id: str | None = None

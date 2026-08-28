@@ -3,6 +3,7 @@ import logging
 import httpx
 
 from app.alerts.notifiers.base import BaseNotifier, AlertMessage, SendResult
+from app.outbound import outbound_verify, tls_error_hint
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,8 @@ class FeishuNotifier(BaseNotifier):
         }
 
         try:
-            async with httpx.AsyncClient(timeout=10, verify=False) as client:
+            # webhook_url embeds the bot token — verify the peer.
+            async with httpx.AsyncClient(timeout=10, verify=outbound_verify()) as client:
                 response = await client.post(webhook_url, json=card)
                 data = response.json()
                 if data.get("code") != 0:
@@ -56,7 +58,7 @@ class FeishuNotifier(BaseNotifier):
                 return SendResult(success=True)
         except Exception as e:
             logger.error("Feishu webhook request error: %s", e)
-            return SendResult(success=False, error=f"请求失败: {e}")
+            return SendResult(success=False, error=f"请求失败: {e}{tls_error_hint(e)}")
 
     async def test(self, channel_config: dict) -> SendResult:
         test_alert = AlertMessage(

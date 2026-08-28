@@ -5,6 +5,8 @@ LLM-based intent parsing: natural language → structured API call.
 import json
 import httpx
 
+from app.outbound import outbound_verify, tls_error_hint
+
 SYSTEM_PROMPT = """你是 NGFW Monitor 防火墙监控系统的 AI 助手。根据用户的自然语言问题，生成对应的 API 查询参数。
 
 可用的查询能力：
@@ -60,10 +62,11 @@ async def parse_intent(message: str, api_base: str, api_key: str, model: str) ->
 
     url = f"{api_base.rstrip('/')}/chat/completions"
     try:
-        async with httpx.AsyncClient(verify=False, timeout=30) as client:
+        # api_key goes out in the Authorization header — verify the peer.
+        async with httpx.AsyncClient(verify=outbound_verify(), timeout=30) as client:
             resp = await client.post(url, headers=headers, json=payload)
     except httpx.ConnectError as e:
-        raise IntentError(f"无法连接模型服务: {e}")
+        raise IntentError(f"无法连接模型服务: {e}{tls_error_hint(e)}")
     except httpx.TimeoutException:
         raise IntentError("模型服务请求超时（30s）")
     except Exception as e:
