@@ -249,10 +249,12 @@ async def batch_acknowledge_events(
         query = query.where(AlertEvent.id.in_(req.event_ids))
     elif req.rule_id:
         query = query.where(AlertEvent.rule_id == req.rule_id)
-    else:
-        scoped_ids = await get_scoped_device_ids(user, session)
-        if scoped_ids is not None:
-            query = query.where(AlertEvent.device_id.in_(scoped_ids))
+
+    # scope 过滤要无条件生效：只放在 else 分支里的话，带 event_ids / rule_id
+    # 的调用就能确认（静音）范围外设备的告警。
+    scoped_ids = await get_scoped_device_ids(user, session)
+    if scoped_ids is not None:
+        query = query.where(AlertEvent.device_id.in_(scoped_ids))
 
     result = await session.execute(query)
     events = result.scalars().all()
@@ -272,9 +274,13 @@ async def acknowledge_event(
     user: User = Depends(get_current_user),
 ):
     from datetime import datetime, timezone
+    from app.auth.scope import check_device_in_scope
     result = await session.execute(select(AlertEvent).where(AlertEvent.id == event_id))
     event = result.scalar_one_or_none()
     if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+    # 范围外的事件按"不存在"处理，不泄露它的存在
+    if event.device_id and not await check_device_in_scope(event.device_id, user, session):
         raise HTTPException(status_code=404, detail="Event not found")
     event.status = AlertStatus.acknowledged
     event.acknowledged_at = datetime.now(timezone.utc)

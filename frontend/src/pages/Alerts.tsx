@@ -341,6 +341,9 @@ function Alerts() {
         formValues.smtp_host = channel.config?.smtp_host
         formValues.smtp_port = channel.config?.smtp_port
         formValues.username = channel.config?.username
+        // 后端把密钥字段回显成 ***，原样提交回去表示"保持不变"。不预填的话
+        // 编辑任何字段都会把 SMTP 口令清成空。
+        formValues.password = channel.config?.password
         formValues.recipients = (channel.config?.recipients || []).join(', ')
         formValues.use_ssl = channel.config?.use_ssl !== false
       } else {
