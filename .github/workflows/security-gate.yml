@@ -1,0 +1,56 @@
+# scripts/security-gate.sh 的触发器。脚本本身不动，这里只负责「按时跑」和「把日志捞出来」。
+#
+# 为什么需要它：关卡之前只是 CLAUDE.md 里的一行命令，靠人记得跑。CI 是唯一不依赖
+# 自觉、也不依赖每台机器装过 .git/hooks 的触发点。
+#   - push main：改动落到 main 时就出信号，此时还没推 public，历史还能改
+#   - tag v*：关卡本来的定位就是发布前关卡
+#   - pull_request：走分支时在合并前出信号
+# 本地仍可随时手跑：bash scripts/security-gate.sh
+#
+# 注意：绿灯不等于代码安全。关卡看不到授权缺陷、IDOR、业务逻辑、prompt 注入
+# （脚本头部和 /security-scan 都写了这条）。那些要 /security-review 看 diff。
+name: security-gate
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# 连着推几个 commit 时只跑最后一个。私有仓 Free 每月 2000 分钟，一次全量 5-10 分钟。
+concurrency:
+  group: security-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    # trivy 单步就有 --timeout 30m，整体要留余量
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # [1/5] gitleaks 扫全 git 历史，默认的浅克隆会漏掉早期 commit
+          fetch-depth: 0
+
+      # 关卡五项全部走一次性 docker 容器，ubuntu-latest 自带 docker，无需额外装。
+      # CA_ARGS / SECURITY_GATE_CA_BUNDLE 是本地过公司 TLS 解密代理才需要的，CI 不用。
+      - name: 安全关卡
+        run: bash scripts/security-gate.sh
+
+      # 脚本把命中细节写到 /tmp/gate-*.log，runner 销毁后就没了。失败时必须原地打出来，
+      # 否则 CI 里只剩一句「见 /tmp/gate-xxx.log」而那个文件根本不存在。
+      - name: 失败详情
+        if: failure()
+        run: |
+          shopt -s nullglob
+          for f in /tmp/gate-*.log; do
+            echo "::group::$f"
+            cat "$f"
+            echo "::endgroup::"
+          done

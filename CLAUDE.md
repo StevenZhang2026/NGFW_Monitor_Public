@@ -70,6 +70,7 @@ docker compose logs worker --tail 20 -f
 bash scripts/install-git-hooks.sh
 
 # 发布前安全关卡（确定性，只报相对 security/*.json baseline 的新增）
+# CI 也自动跑：push main / tag v* / PR（.github/workflows/security-gate.yml）
 bash scripts/security-gate.sh
 ```
 
