@@ -1,6 +1,6 @@
 # 防火墙集中监控系统 — Palo Alto NGFW 监控与分析平台
 
-当前版本 **v2.2**，各版本变更见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **v3.0**，各版本变更见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 概述
 
