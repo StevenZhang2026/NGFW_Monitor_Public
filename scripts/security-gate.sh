@@ -138,9 +138,11 @@ elif [ "${SKIP_NETWORK_SCANS:-0}" = "1" ]; then
 else
     # 退出码要分开看：semgrep 1=有命中，2=自己跑挂了（拉不到规则库最常见）。
     # 两者都当"发现问题"的话，日志空白却报 FAIL，排查方向完全错。
+    # 不加 --quiet：它只让成功时的日志干净一点，代价是 exit 2（拉不到规则库）时日志
+    # 整个是空的 —— 本地能「去掉重跑」，CI 里 runner 已经销毁，只剩一句没有下文的 FAIL。
     docker run --rm -v "$REPO:/src:ro" "${CA_ARGS[@]}" semgrep/semgrep \
         semgrep scan --config=p/security-audit --config=p/secrets \
-        --severity=ERROR --error --quiet /src >/tmp/gate-semgrep.log 2>&1
+        --severity=ERROR --error /src >/tmp/gate-semgrep.log 2>&1
     case $? in
         0) pass "无 ERROR 级命中" ;;
         1) fail "发现 ERROR 级命中 —— 见 /tmp/gate-semgrep.log" ;;
@@ -148,7 +150,7 @@ else
            echo "        规则库要从 semgrep.dev 现拉，没有本地缓存。CERTIFICATE_VERIFY_FAILED"
            echo "        说明这个域被 TLS 解密代理拦了 —— 拦截是按域名的，同一次运行里"
            echo "        pypi/ghcr/npm 可能全都正常。设 SECURITY_GATE_CA_BUNDLE=<代理根CA.pem>，"
-           echo "        或换网络。--quiet 会吞掉这类失败的输出，日志空白时去掉它重跑。" ;;
+           echo "        或换网络。日志末尾是 requests.exceptions.SSLError 就是这个原因。" ;;
     esac
 fi
 
