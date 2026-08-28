@@ -52,6 +52,7 @@ else
     # 生成随机密码和密钥
     DB_PASSWORD=$(openssl rand -base64 24 | tr -dc 'a-zA-Z0-9' | head -c 24)
     SECRET_KEY=$(openssl rand -hex 32)
+    JWT_SECRET_KEY=$(openssl rand -hex 32)
 
     read -rp "  Web 访问端口 [默认 443]: " WEB_PORT
     WEB_PORT=${WEB_PORT:-443}
@@ -77,9 +78,11 @@ REDIS_URL=redis://redis:6379/0
 CELERY_BROKER_URL=redis://redis:6379/0
 CELERY_RESULT_BACKEND=redis://redis:6379/1
 
-# 安全
+# 安全（变量名必须与 backend/app/config.py 的 Settings 字段一致，否则会静默回落到 "change-me"）
 SECRET_KEY=${SECRET_KEY}
-ADMIN_INIT_PASSWORD=${ADMIN_PASSWORD}
+JWT_SECRET_KEY=${JWT_SECRET_KEY}
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=${ADMIN_PASSWORD}
 
 # Web
 WEB_PORT=${WEB_PORT}
@@ -159,7 +162,7 @@ info "安装完成！"
 echo ""
 echo "  访问地址:  https://$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'localhost'):${WEB_PORT:-443}"
 echo "  默认账号:  admin"
-echo "  默认密码:  查看 .env 中的 ADMIN_INIT_PASSWORD"
+echo "  默认密码:  查看 .env 中的 ADMIN_PASSWORD"
 echo ""
 echo "  常用命令:"
 echo "    查看状态:  docker compose ps"

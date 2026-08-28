@@ -38,3 +38,6 @@ backups/
 # PPT：一个是 PANW 公司模板（第三方素材，不进公开仓库），
 # 一个是 docs/gen_ppt.py 的生成产物
 docs/*.pptx
+
+# 开发对话导出：里面有 curl 里的明文密码、API Key、JWT，不进版本控制
+docs/vibecoding-log.md
