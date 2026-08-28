@@ -1,0 +1,45 @@
+# 正确性检查。与 security-gate.yml 分开：那个是安全扫描，这个是「代码还成立吗」。
+#
+# 目前只有前端类型检查。它本来就在跑（package.json 的 build 是 `tsc && vite build`），
+# 但只在构建镜像时才炸，PR 上看不见 —— 类型错误要等到有人 docker compose build
+# 才暴露。这里把它提到合并前。
+#
+# npm ci 顺带校验 lockfile：与 package.json 不一致时直接失败，不会像 npm install
+# 那样悄悄重新解析版本。
+name: checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  frontend-typecheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # 与 frontend/Dockerfile 的 node:20-alpine 对齐
+          node-version: '20'
+          cache: npm
+          # lockfile 不在仓库根目录，不指这条 cache 找不到它
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+
+      - run: npm run typecheck
