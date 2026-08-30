@@ -42,8 +42,7 @@
 
 核心功能均已上线并端到端验证（PA-440）。已完成项与版本历史见 `CHANGELOG.md` 和 `git tag -n99`，此处不重复。
 
-未完成：Panorama 设备发现、数据保留策略自动执行、多设备（PA-5500/7000）接入验证。
-待办、优化事项、已知 bug 见 `docs/roadmap.md`。
+未完成：Panorama 设备发现、数据保留策略自动执行、多设备（PA-5500/7000）接入验证。待办、优化事项、已知 bug 见 `docs/roadmap.md`。
 
 ## 常用命令
 
@@ -54,8 +53,7 @@ docker compose up -d
 # 重建并重启（代码修改后）
 docker compose build backend frontend worker beat && docker compose up -d
 
-# 前端访问
-# https://localhost:3000 (自签名证书)
+# 前端访问：https://localhost:3000 (自签名证书)
 
 # 后端单独开发
 cd backend && pip install -r requirements.txt && uvicorn app.main:app --reload
@@ -66,13 +64,12 @@ cd frontend && npm install && npm run dev
 # 查看采集日志
 docker compose logs worker --tail 20 -f
 
-# 装 git hook（clone 后跑一次；hook 本体在 scripts/githooks/，只有 hooksPath 是本机配置）
-# pre-commit 只挡凭据（要快）；pre-push = 凭据 + 安全关卡（拦截）+ fix: 补测试提醒（只提醒）
+# 装 git hook（clone 后跑一次；本体在 scripts/githooks/，只有 hooksPath 是本机配置）。pre-commit
+# 只挡凭据；pre-push = 凭据 + 关卡（拦截）+ fix 补测试 / 该跑哪个 review 的提醒（不拦）
 bash scripts/install-git-hooks.sh
 
-# 安全关卡（确定性，只报相对 security/*.json baseline 的新增）
-# pre-push 自动跑，带 SKIP_NETWORK_SCANS=1（约 16s）；完整版由 CI 跑：
-# push main / tag v* / PR（.github/workflows/security-gate.yml）
+# 安全关卡（只报相对 security/*.json baseline 的新增）。pre-push 自动跑（SKIP_NETWORK_SCANS=1，
+# 约 16s）；完整版由 CI 跑：push main / tag v* / PR（.github/workflows/security-gate.yml）
 bash scripts/security-gate.sh
 bash scripts/test-backend.sh   # 后端测试；脚本头注释解释了为什么绕 Docker 跑
 ```
@@ -113,7 +110,6 @@ bash scripts/test-backend.sh   # 后端测试；脚本头注释解释了为什�
 - 计数器类指标存原始累计值，**差分在查询期做**（`app/metrics/rate.py`）。差分为负说明设备重启或计数器回绕，该点丢弃；lookback 要越过 `:start`，否则首个样本没有前值
 - `worker_prefetch_multiplier=1`：worker 预取的任务在队列深度里看不见，积压会藏在 worker 内存里，还会在里面熬过 `expires` 被丢掉
 - 跳过计数是**增量消费**的（`take_skip_deltas` 读一次就推进水位），所以「跳周期」是事件不是状态，下次自检没有新增就自动恢复；API 展示读累计值，不推进水位
-- PA-440 管理面资源有限，并发连接不能太多（当前已优化为单连接复用）
 - `cpu_usage` 是**管理面**（top），数据面 CPU 得用 `show running resource-monitor`，同一时刻实测能差几十个点。top 那行 `%Cpu(s)` 的字段和**不等于 100**（实测 33~93，4 核），所以单读任何一个字段都错：`us` 漏掉 sy/ni（忙时差 11 点），`id` 完全不可信（`100-id` 在进程只占 18% 时报 86%）。现为"非 id 字段求和"，改法拿真机进程列表 %CPU 之和核对过——**改这个指标必须用真机采样验，自造样本三次都看着合理但错**。历史数据三段口径（`us` → `100-id` → 求和），跨段有台阶
 
 ### 数据库与 ORM
@@ -129,7 +125,10 @@ bash scripts/test-backend.sh   # 后端测试；脚本头注释解释了为什�
   `devices` 的新接口都要显式过 `app/auth/scope.py`；跨设备聚合时"没传 device_id"**不等于
   不过滤**（用 `scoped_device_sql()`），授权检查也不能只写在 if/elif 的某个分支里
 - **Copilot 的每个 action 都是一条独立数据出口**，加 action 按"新接口"审授权，不是按"查询函数"
-- 安全关卡和扫描器对越权是**零覆盖**（只匹配已知坏模式）：加接口 / 加 action 后必须跑一次 `/security-review` 看 diff，这是唯一能发现 scope 漏掉的环节
+- 关卡和扫描器只认**已知坏模式**，两类盲区必须靠 LLM 看 diff（pre-push 按路径提醒，但提醒
+  不等于跑过）：`api/` `auth/` `copilot/` → `/security-review`（越权是"少写一个调用"，没有
+  规则能匹配不存在的调用）；`metrics/` `collectors/` `alerts/` → `/code-review`（不崩不红，
+  只给一个看着可信的错数字，且测试可能和代码出自同一个错理解——cpu_usage 绿着错了三版）
 - 凭据字段脱敏（`_is_secret_key`）必须配回写保护：前端会把读到的 `***` 原样提交回来，
   直接落库就把真凭据覆盖了。约定掩码值 = 保持不变
 

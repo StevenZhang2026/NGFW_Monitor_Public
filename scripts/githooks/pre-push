@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
-# push 前的三道检查。提交路径上只留 pre-commit 的 gitleaks，其余都在这里 ——
+# push 前的四道检查。提交路径上只留 pre-commit 的 gitleaks，其余都在这里 ——
 # 提交要快，push 才是"东西要出去了"的那一刻。
 #
-#   1. gitleaks   待推送的 commit 里有凭据 → 拦
-#   2. 安全关卡    相对 baseline 有新增 → 拦（跳过联网项，见下）
-#   3. fix: 提醒   fix 提交没带测试 → 只提醒，永远放行
+#   1. gitleaks    待推送的 commit 里有凭据 → 拦
+#   2. 安全关卡     相对 baseline 有新增 → 拦（跳过联网项，见下）
+#   3. fix: 提醒    fix 提交没带测试 → 只提醒，永远放行
+#   4. review 提醒  动了授权面 / 口径面 → 只提醒，永远放行
+#
+# 3 和 4 只提醒是有原因的：它们要的东西（写测试、跑 LLM review）都不是确定性的，
+# 而 --no-verify 是一刀切的 —— 拿不确定的检查去挡 push，换来的是 1 和 2 也被绕过。
 #
 # 整体绕过：git push --no-verify
 set -uo pipefail
@@ -51,6 +55,10 @@ else
     echo "[安全关卡] 跳过：没有可用的 docker（启动 Docker Desktop 后重跑）" >&2
 fi
 
+# 下面两段共用「待推送的 commit」。--no-merges：合并提交的 diff 不是人写的。
+UNPUSHED=$(git rev-list --all --not --remotes --no-merges 2>/dev/null)
+[ -z "$UNPUSHED" ] && exit 0
+
 # ---------- 3. fix: 提交补测试的提醒 ----------
 # 为什么只提醒不拦截：合理的 fix 有一批本来就测不了（改 Dockerfile、调一个配置值、
 # 只能在真机上验的采集口径）。拦下来的结果是养成 --no-verify 的手感，而 --no-verify
@@ -59,9 +67,8 @@ fi
 # 放在最后：警告要留在屏幕最下面才看得见。
 fix_commits_without_tests() {
     local sha subject files
-    # --no-merges：合并提交的 diff 不是人写的。Revert 的标题以 Revert 开头，
-    # 天然不匹配 ^fix。
-    for sha in $(git rev-list --all --not --remotes --no-merges 2>/dev/null); do
+    # Revert 的标题以 Revert 开头，天然不匹配 ^fix。
+    for sha in $UNPUSHED; do
         subject=$(git log -1 --format=%s "$sha")
         printf '%s' "$subject" | grep -qE '^fix(\([^)]*\))?!?:' || continue
 
@@ -86,5 +93,36 @@ if [ -n "$FLAGGED" ]; then
     echo "  （只能真机验、改的是配置或构建文件）就忽略这条，push 会照常继续。" >&2
     echo "" >&2
 fi
+
+# ---------- 4. 该跑哪个 review 的提醒 ----------
+# 上面 1、2 两道全是模式匹配：只认「长得像已知坏东西」。有两类问题它们结构上看不见，
+# 而这两类在本项目里都真实发生过：
+#
+#   授权面  少写一个 scope 过滤不是「坏模式」，是「没有模式」—— 没有规则能匹配一个
+#           不存在的调用。scope 是逐接口手写的，没有集中拦截点。
+#   口径面  会给出一个看着可信的错数字，不崩不红：cpu_usage 拿 id 反算（真机 86% vs
+#           实际 18%，还误报了 4 次，而当时测试是绿的，因为代码和测试出自同一个错
+#           理解）、报表读 appstat 而不是 trsum（253MB vs 1407MB）、通知冷却被
+#           autoflush 坑成静音（事件入库但没人收到）。
+#
+# 这两类要靠 LLM 看 diff（/security-review、/code-review）。hook 里跑不了 LLM，所以
+# 这里只做确定性的那半件事：判断该跑哪个、指出看哪些文件。
+CHANGED=$(for sha in $UNPUSHED; do
+    git show --name-only --format= --diff-filter=ACMR "$sha"
+done | sort -u)
+
+remind_review() {  # remind_review <命令> <这是什么面> <路径正则>
+    local cmd="$1" surface="$2" re="$3" hits
+    hits=$(printf '%s\n' "$CHANGED" | grep -E "$re") || return 0
+    echo "" >&2
+    echo "[提醒] 待推送的改动动了${surface}，建议跑一次 $cmd 看 diff：" >&2
+    printf '%s\n' "$hits" | sed 's/^/    /' >&2
+    echo "" >&2
+}
+
+remind_review "/security-review" "授权面（scope 逐接口手写，关卡对越权零覆盖）" \
+    '^backend/app/(api|auth|copilot)/'
+remind_review "/code-review" "指标口径 / 计算逻辑（错在这里只会得到一个看着合理的数字）" \
+    '^backend/app/(metrics|collectors|alerts)/'
 
 exit 0

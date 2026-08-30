@@ -114,15 +114,30 @@ echo "[3/5] trivy —— 依赖 CVE + 容器/IaC 配置 + 密钥"
 if [ "$MODE" = "update" ]; then
     skip "trivy 用 .trivyignore（手工维护），无需生成"
 else
-    if docker run --rm -v "$REPO:/src:ro" -v trivy-cache:/root/.cache "${CA_ARGS[@]}" aquasec/trivy \
+    # 退出码要分开看（和下面 semgrep 那步同一个道理）：3 = 真的有 HIGH/CRITICAL，
+    # 其它非 0 = trivy 自己没跑起来。混在一起的后果是网络故障被报成"发现漏洞"，
+    # 而 pre-push 拿这个结果挡 push —— 缓存一过期就谁也推不上去。
+    # 用 3 而不是 1：trivy 出错时也返回 1。
+    docker run --rm -v "$REPO:/src:ro" -v trivy-cache:/root/.cache "${CA_ARGS[@]}" aquasec/trivy \
         fs --scanners vuln,secret,misconfig --severity HIGH,CRITICAL \
         --skip-dirs certs --ignorefile /src/.trivyignore \
         --db-repository ghcr.io/aquasecurity/trivy-db:2 --timeout 30m \
-        --exit-code 1 --quiet /src >/tmp/gate-trivy.log 2>&1; then
-        pass "无 HIGH/CRITICAL"
-    else
-        fail "发现 HIGH/CRITICAL —— 见 /tmp/gate-trivy.log"
-    fi
+        --exit-code 3 --quiet /src >/tmp/gate-trivy.log 2>&1
+    case $? in
+        0) pass "无 HIGH/CRITICAL" ;;
+        3) fail "发现 HIGH/CRITICAL —— 见 /tmp/gate-trivy.log" ;;
+        # 漏洞库是从 ghcr 现拉的，本地缓存过期后这一步就要走网络，在带 TLS 解密代理的
+        # 公司网络下是 x509: certificate signed by unknown authority。
+        # SKIP_NETWORK_SCANS=1 是调用方声明"这次按离网处理"（pre-push 就是这么调的），
+        # 那么拉不到库算跳过、不算失败；CI 没这个变量，仍然硬失败。
+        *) if [ "${SKIP_NETWORK_SCANS:-0}" = "1" ]; then
+               skip "trivy 未能运行（不是代码问题）—— 见 /tmp/gate-trivy.log"
+               echo "        漏洞库拉不到；SKIP_NETWORK_SCANS=1，不计失败。这一步这次没有覆盖。"
+               echo "        要在本机跑通：SECURITY_GATE_CA_BUNDLE=<企业 CA 的 PEM> 重跑（见脚本头部）"
+           else
+               fail "trivy 未能运行（不是代码问题）—— 见 /tmp/gate-trivy.log"
+           fi ;;
+    esac
 fi
 
 # ---------- 4. 语言无关 SAST ----------
